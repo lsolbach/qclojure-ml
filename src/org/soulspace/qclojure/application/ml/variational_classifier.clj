@@ -1,15 +1,14 @@
 (ns org.soulspace.qclojure.application.ml.variational-classifier
   "Variational Quantum Classifier using QClojure core + noj for ML pipeline integration"
-  (:require [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
-           [org.soulspace.qclojure.application.ml.encoding :as encoding]
-           [org.soulspace.qclojure.application.ml.training :as training]
-           [org.soulspace.qclojure.domain.circuit :as qc]
-           [org.soulspace.qclojure.domain.state :as qs]
-           [fastmath.core :as m]
-           [fastmath.optimization :as opt]
-           [tablecloth.api :as tc]
-           [scicloj.metamorph.ml :as ml]
-           [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [tablecloth.api :as tc]
+            [fastmath.core :as m]
+            [org.soulspace.qclojure.domain.state :as qs]
+            [org.soulspace.qclojure.domain.circuit :as qc]
+            [org.soulspace.qclojure.domain.ansatz :as ansatz]
+            [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
+            [org.soulspace.qclojure.application.ml.encoding :as encoding]
+            [org.soulspace.qclojure.application.ml.training :as training]))
 
 ;; Specs for VQC
 (s/def ::num-features pos-int?)
@@ -45,7 +44,7 @@
         total-qubits (+ encoding-qubits class-qubits)
         
         ;; Create base ansatz using VQE hardware-efficient ansatz
-        base-ansatz (vqe/hardware-efficient-ansatz total-qubits layers)]
+        base-ansatz (ansatz/hardware-efficient-ansatz total-qubits layers)]
     
     (fn classifier-circuit [parameters features]
       (let [;; Create base circuit
@@ -211,7 +210,6 @@
 ;; Rich comment block for testing
 (comment
   ;; Create synthetic dataset for testing
-  (require '[tablecloth.api :as tc])
   
   ;; Create test dataset
   (def test-dataset
