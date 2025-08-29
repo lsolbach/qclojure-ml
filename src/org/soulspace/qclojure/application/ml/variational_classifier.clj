@@ -6,7 +6,6 @@
             [org.soulspace.qclojure.domain.state :as qs]
             [org.soulspace.qclojure.domain.circuit :as qc]
             [org.soulspace.qclojure.domain.ansatz :as ansatz]
-            [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
             [org.soulspace.qclojure.application.ml.encoding :as encoding]
             [org.soulspace.qclojure.application.ml.training :as training]))
 
