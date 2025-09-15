@@ -2,8 +2,8 @@
   :description "Quantum Machine Learning algorithms for QClojure"
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.12.1"]
-                 [org.soulspace/qclojure "0.12.0"]
+  :dependencies [[org.clojure/clojure "1.12.2"]
+                 [org.soulspace/qclojure "0.17.0"]
                  [org.scicloj/noj "2-beta18"]
                  [org.scicloj/clay "2-beta52"]]
 
