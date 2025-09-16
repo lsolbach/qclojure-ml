@@ -7,6 +7,10 @@ QClojure ML uses QClojure algorithms like Variational Quantum Eigensolver (VQE)
 for the quantum part and the data science libraries like noj, tech.ml.dataset and
 dtype.next for the classical parts of QML algorithms.
 
+[![Clojars Project](https://img.shields.io/clojars/v/org.soulspace/qclojure-ml.svg)](https://clojars.org/org.soulspace/qclojure-ml)
+[![cljdoc badge](https://cljdoc.org/badge/org.soulspace/qclojure-ml)](https://cljdoc.org/d/org.soulspace/qclojure-ml)
+![GitHub](https://img.shields.io/github/license/lsolbach/qclojure-ml)
+
 ## Features
 * Feature encoding
 * Training
