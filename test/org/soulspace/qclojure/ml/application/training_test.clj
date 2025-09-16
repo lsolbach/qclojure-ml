@@ -35,16 +35,15 @@
       (is (< result 100.0) "Cost should be reasonable for test data")))
   
   (testing "Error handling"
-    (let [invalid-params []
+    (let [invalid-params []  ; Empty params should trigger error handling in training
           ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
           valid-features [[0.5 0.3]]
           valid-labels [0]
-          backend (sim/create-simulator)
-          
-          result (training/classification-cost invalid-params ansatz-fn valid-features valid-labels backend)]
+          backend (sim/create-simulator)]
       
-      ;; The current implementation returns 1000.0 on error
-      (is (= 1000.0 result) "Should return high cost on error"))))
+      ;; Test with empty parameters - should catch error and return 1000.0
+      (is (= 1000.0 (training/classification-cost invalid-params ansatz-fn valid-features valid-labels backend))
+          "Should return high cost on error"))))
 
 (deftest test-parameter-shift-gradient-validation
   (testing "Parameter shift gradient validation using optimization namespace"
@@ -99,9 +98,11 @@
 ;; Property-based tests
 (deftest test-cost-function-properties
   (testing "Cost function properties"
-    (let [test-cases (take 5 (gen/sample 
+    ;; Generate test cases with properly sized parameters for 2-qubit, 1-layer ansatz
+    (let [correct-param-gen (gen/vector (gen/double* {:min -3.14 :max 3.14 :NaN? false :infinite? false}) 6 6)
+          test-cases (take 5 (gen/sample 
                                (gen/hash-map 
-                                :parameters parameter-vector-gen
+                                :parameters correct-param-gen
                                 :features feature-matrix-gen
                                 :labels binary-labels-gen)))]
       
@@ -109,48 +110,39 @@
         (when (= (count (:features test-case)) (count (:labels test-case)))
           (let [ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
                 backend (sim/create-simulator)
-                cost (try
-                       (training/classification-cost 
-                        (:parameters test-case)
-                        ansatz-fn
-                        (:features test-case)
-                        (:labels test-case)
-                        backend)
-                       (catch Exception _ 1000.0))]
+                cost (training/classification-cost 
+                      (:parameters test-case)
+                      ansatz-fn
+                      (:features test-case)
+                      (:labels test-case)
+                      backend)]
             
             (is (number? cost) "Cost should be numeric")
-            (is (>= cost 0.0) "Cost should be non-negative")))))))
+            (is (>= cost 0.0) "Cost should be non-negative")
+            (is (< cost 1000.0) "Cost should be reasonable for valid inputs")))))))
 
 ;; Error handling tests
 (deftest test-error-handling
   (testing "Various error conditions"
     (let [valid-params [0.1 0.2 0.3 0.4 0.5 0.6]
           ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
-          backend (sim/create-simulator)
-          
-          ; Test mismatched features and labels
-          mismatched-result (try
-                              (training/classification-cost 
-                               valid-params ansatz-fn 
-                               [[0.5 0.3]] [0 1] backend) ; 1 feature, 2 labels
-                              (catch Exception _ 1000.0))
-          
-          ; Test empty data
-          empty-result (try
-                         (training/classification-cost 
-                          valid-params ansatz-fn [] [] backend)
-                         (catch Exception _ 1000.0))
-          
-          ; Test nil inputs
-          nil-result (try
-                       (training/classification-cost 
-                        nil ansatz-fn [[0.5]] [0] backend)
-                       (catch Exception _ 1000.0))]
+          backend (sim/create-simulator)]
       
-      ; Current implementation returns 1000.0 on all errors
-      (is (= 1000.0 mismatched-result) "Should handle mismatched data")
-      (is (= 1000.0 empty-result) "Should handle empty data")  
-      (is (= 1000.0 nil-result) "Should handle nil inputs"))))
+      ;; Test mismatched features and labels
+      (is (= 1000.0 (training/classification-cost 
+                     valid-params ansatz-fn 
+                     [[0.5 0.3]] [0 1] backend)) ; 1 feature, 2 labels
+          "Should handle mismatched data")
+      
+      ;; Test empty data  
+      (is (= 1000.0 (training/classification-cost 
+                     valid-params ansatz-fn [] [] backend))
+          "Should handle empty data")
+      
+      ;; Test nil inputs - these should be caught by the try-catch in classification-cost
+      (is (= 1000.0 (training/classification-cost 
+                     nil ansatz-fn [[0.5]] [0] backend))
+          "Should handle nil inputs"))))
 
 ;; Rich comment block for REPL testing
 (comment

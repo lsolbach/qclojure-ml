@@ -1,6 +1,7 @@
 (ns org.soulspace.qclojure.ml.application.training
   "Training algorithms and cost functions for quantum machine learning"
   (:require [clojure.string :as str]
+            [clojure.spec.alpha :as s]
             [fastmath.core :as m]
             [org.soulspace.qclojure.domain.state :as state]
             [org.soulspace.qclojure.domain.circuit :as circuit]
@@ -10,6 +11,12 @@
             [org.soulspace.qclojure.application.algorithm.optimization :as opt]
             [org.soulspace.qclojure.application.algorithm.variational-algorithm :as va]
             [org.soulspace.qclojure.ml.application.encoding :as encoding]))
+
+;; Specs for training data validation
+(s/def ::feature-vector (s/coll-of number? :kind vector?))
+(s/def ::features (s/coll-of ::feature-vector :kind vector?))
+(s/def ::labels (s/coll-of int? :kind vector?))
+(s/def ::training-data (s/keys :req-un [::features ::labels]))
 
 ;; QML-specific cost functions and loss function library
 
@@ -113,6 +120,15 @@
   Cost value (real number)"
   [parameters ansatz-fn features labels backend & {:keys [options] :or {options {}}}]
   (try
+    ;; Input validation
+    (when (or (nil? parameters) 
+              (not (vector? parameters))
+              (empty? parameters)
+              (empty? features)
+              (empty? labels)
+              (not= (count features) (count labels)))
+      (throw (ex-info "Invalid inputs" {:parameters parameters :features features :labels labels})))
+    
     (let [num-samples (count features)
           loss-function (:loss-function options :cross-entropy)
           regularization (:regularization options :none)
