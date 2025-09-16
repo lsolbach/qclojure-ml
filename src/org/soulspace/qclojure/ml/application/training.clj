@@ -1,4 +1,4 @@
-(ns org.soulspace.qclojure.application.ml.training
+(ns org.soulspace.qclojure.ml.application.training
   "Training algorithms and cost functions for quantum machine learning"
   (:require [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
             [org.soulspace.qclojure.application.backend :as qb]
@@ -6,12 +6,7 @@
             [org.soulspace.qclojure.domain.circuit :as qc]
             [org.soulspace.qclojure.domain.circuit-composition :as cc]
             [org.soulspace.qclojure.domain.state :as qs]
-            [org.soulspace.qclojure.adapter.backend.simulator :as sim]
-            [fastmath.optimization :as opt]
-            [fastmath.core :as m]
-            [tablecloth.api :as tc]
-            [scicloj.metamorph.ml :as ml]
-            [clojure.spec.alpha :as s]))
+            [fastmath.core :as m]))
 
 ;; QML-specific cost functions
 (defn classification-cost

@@ -1,25 +1,22 @@
-(ns org.soulspace.qclojure.application.ml.encoding
- "Quantum data encoding strategies for quantum machine learning"
- (:require [org.soulspace.qclojure.domain.state :as qs]
-           [org.soulspace.qclojure.domain.circuit :as qc]
-           [fastmath.core :as m]
-           [fastmath.complex :as fc]
-           [clojure.spec.alpha :as s]))
+(ns org.soulspace.qclojure.ml.application.encoding
+  "Quantum data encoding strategies for quantum machine learning"
+  (:require [clojure.spec.alpha :as s]
+            [fastmath.core :as fm]
+            [fastmath.complex :as fc]
+            [org.soulspace.qclojure.domain.state :as state]
+            [org.soulspace.qclojure.domain.circuit :as circuit]))
 
 ;; Specs for input validation (using QClojure specs where available)
 (s/def ::feature-value number?)
 (s/def ::feature-vector (s/coll-of ::feature-value :min-count 1 :kind vector?))
 (s/def ::normalized-vector (s/and ::feature-vector 
                                   #(every? (fn [x] (<= 0.0 x 1.0)) %)))
-(s/def ::num-qubits :org.soulspace.qclojure.domain.state/num-qubits)  ; Use QClojure spec
 (s/def ::gate-type #{:rx :ry :rz})
 (s/def ::bit-vector (s/coll-of #{0 1} :kind vector?))  ; Renamed for clarity
 (s/def ::bit-string (s/or :string string? :vector ::bit-vector))  ; Accept both string and vector
-(s/def ::quantum-state :qs/quantum-state)  ; Use QClojure spec
 
 ;; Specs for encoding validation
 (s/def ::data-vector (s/coll-of number? :kind vector?))
-(s/def ::num-qubits pos-int?)
 (s/def ::gate-type #{:rx :ry :rz})
 (s/def ::bit-string (s/or :string string? :vector (s/coll-of #{0 1} :kind vector?)))
 
@@ -96,19 +93,19 @@
       :else
       (safe-operation
        (fn [fv n-qubits]
-         (let [num-amplitudes (int (m/pow 2 n-qubits))
+         (let [num-amplitudes (int (fm/pow 2 n-qubits))
                _ (when (> (count fv) num-amplitudes)
                    (throw (ex-info "Feature vector too large for qubit count"
                                    {:feature-count (count fv)
                                     :max-amplitudes num-amplitudes
                                     :num-qubits n-qubits})))
                padded-features (take num-amplitudes (concat fv (repeat 0.0)))
-               sum-squares (m/sqrt (reduce + (map #(* % %) padded-features)))
+               sum-squares (fm/sqrt (reduce + (map #(* % %) padded-features)))
                normalized-amplitudes (if (> sum-squares 0.0)
                                        (mapv #(/ % sum-squares) padded-features)
                                        padded-features)
                complex-amplitudes (mapv #(fc/complex % 0) normalized-amplitudes)]
-           (qs/multi-qubit-state complex-amplitudes)))
+           (state/multi-qubit-state complex-amplitudes)))
        "Failed to perform amplitude encoding"
        feature-vector
        num-qubits))))
@@ -158,9 +155,9 @@
                     (reduce-kv (fn [c idx angle]
                                  (if (< idx num-qubits)
                                    (case gate-type
-                                     :rx (qc/rx-gate c idx (* angle m/PI))
-                                     :ry (qc/ry-gate c idx (* angle m/PI))
-                                     :rz (qc/rz-gate c idx (* angle m/PI)))
+                                     :rx (circuit/rx-gate c idx (* angle fm/PI))
+                                     :ry (circuit/ry-gate c idx (* angle fm/PI))
+                                     :rz (circuit/rz-gate c idx (* angle fm/PI)))
                                    c))
                                circuit
                                data-row)
@@ -216,7 +213,7 @@
              (throw (ex-info "Bit string contains invalid values" 
                              {:input bs :converted bit-vec})))
            ;; Use QClojure's computational-basis-state function
-           (qs/computational-basis-state n-qubits bit-vec)))
+           (state/computational-basis-state n-qubits bit-vec)))
        "Failed to perform basis encoding"
        bit-string
        num-qubits))))
@@ -241,7 +238,7 @@
   {:pre [(<= (count data-row) (* num-qubits num-qubits))]}
   (fn [circuit]
     (let [;; First apply Hadamard to all qubits
-          h-circuit (reduce #(qc/h-gate %1 %2) circuit (range num-qubits))
+          h-circuit (reduce #(circuit/h-gate %1 %2) circuit (range num-qubits))
           ;; Then apply data-dependent phase gates
           data-phases (take (* num-qubits num-qubits) (concat data-row (repeat 0.0)))]
       (reduce-kv (fn [c idx phase]
@@ -249,13 +246,13 @@
                          qubit2 (mod idx num-qubits)]
                      (if (= qubit1 qubit2)
                        ;; Single qubit phase
-                       (qc/rz-gate c qubit1 phase)
+                       (circuit/rz-gate c qubit1 phase)
                        ;; Two qubit phase (if qubits are different)
                        (if (< qubit1 qubit2)
                          (-> c
-                             (qc/cnot-gate qubit1 qubit2)
-                             (qc/rz-gate qubit2 phase)
-                             (qc/cnot-gate qubit1 qubit2))
+                             (circuit/cnot-gate qubit1 qubit2)
+                             (circuit/rz-gate qubit2 phase)
+                             (circuit/cnot-gate qubit1 qubit2))
                          c))))
                  h-circuit
                  (vec data-phases)))))

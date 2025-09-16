@@ -1,4 +1,4 @@
-(ns org.soulspace.qclojure.application.ml.quantum-kernel
+(ns org.soulspace.qclojure.ml.application.quantum-kernel
   "Common infrastructure for quantum kernel methods"
   (:require [org.soulspace.qclojure.application.backend :as backend]
             ))

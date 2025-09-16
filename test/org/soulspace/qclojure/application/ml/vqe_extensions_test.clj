@@ -1,1 +1,0 @@
-(ns org.soulspace.qclojure.application.ml.vqe-extensions-test)

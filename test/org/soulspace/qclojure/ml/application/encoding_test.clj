@@ -1,4 +1,4 @@
-(ns org.soulspace.qclojure.application.ml.encoding-test
+(ns org.soulspace.qclojure.ml.application.encoding-test
   (:require [clojure.test :refer [deftest is testing run-tests]]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]

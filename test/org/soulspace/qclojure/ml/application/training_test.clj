@@ -1,4 +1,4 @@
-(ns org.soulspace.qclojure.application.ml.training-test
+(ns org.soulspace.qclojure.ml.application.training-test
   (:require [clojure.test :refer [deftest is testing run-tests]]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
