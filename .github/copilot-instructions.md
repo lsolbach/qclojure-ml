@@ -8,7 +8,7 @@ Double precision is used for the math, but we can switch to arbitrary precision 
 The backend protocol is the basis for the integration of real quantum computers, e.g. cloud based quantum services, and is used to run circuits.
 For visualization we focus on SVG and ASCII first.
 
-The QClojure codebase is available in the sibling directory '../qclojure'
+The QClojure codebase is available in the directory 'reference/qclojure'
 or as github repo 'lsolbach/qclojure'.
 Some namespaces relevant to quantum machine learning in the QClojure codebase are
 * `org.soulspace.qclojure.domain.gate` - quantum gates
@@ -20,7 +20,7 @@ Some namespaces relevant to quantum machine learning in the QClojure codebase ar
 * `org.soulspace.qclojure.adapter.backend.simulator` - simulator backend
 * `org.soulspace.qclojure.adapter.backend.hardware-simulator` - noisy simulator backend
 * `org.soulspace.qclojure.application.algorithm.optimization` - optimization algorithms
-* `org.soulspace.qclojure.application.algorithm.vavariational-algorithm` - variational algorithm framework
+* `org.soulspace.qclojure.application.algorithm.variational-algorithm` - variational algorithm template
 * `org.soulspace.qclojure.application.algorithm.vqe` - variational quantum eigensolver algorithm
 * `org.soulspace.qclojure.application.algorithm.qaoa` - quantum approximate
 
