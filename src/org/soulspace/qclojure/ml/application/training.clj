@@ -1,12 +1,12 @@
 (ns org.soulspace.qclojure.ml.application.training
   "Training algorithms and cost functions for quantum machine learning"
-  (:require [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
-            [org.soulspace.qclojure.application.backend :as qb]
-            [org.soulspace.qclojure.application.ml.encoding :as encoding]
-            [org.soulspace.qclojure.domain.circuit :as qc]
-            [org.soulspace.qclojure.domain.circuit-composition :as cc]
-            [org.soulspace.qclojure.domain.state :as qs]
-            [fastmath.core :as m]))
+  (:require [fastmath.core :as m]
+            [org.soulspace.qclojure.domain.state :as state]
+            [org.soulspace.qclojure.domain.circuit :as circuit]
+            [org.soulspace.qclojure.domain.circuit-composition :as ccomp]
+            [org.soulspace.qclojure.domain.ansatz :as ansatz]
+            [org.soulspace.qclojure.application.backend :as backend]
+            [org.soulspace.qclojure.ml.application.encoding :as encoding]))
 
 ;; QML-specific cost functions
 (defn classification-cost
@@ -30,7 +30,7 @@
                               true-label (nth labels idx)
 
                               ;; Create circuit with feature encoding + ansatz
-                              base-circuit (qc/create-circuit
+                              base-circuit (circuit/create-circuit
                                             (max 2 (int (m/ceil (m/log2 (max 2 (count feature-vec)))))))
 
                               ;; Apply angle encoding for features
@@ -43,16 +43,16 @@
                               ansatz-circuit (ansatz-fn parameters)
                               
                               ;; Combine encoding and ansatz using circuit composition
-                              final-circuit (cc/compose-circuits encoded-circuit ansatz-circuit)
+                              final-circuit (ccomp/compose-circuits encoded-circuit ansatz-circuit)
 
                               ;; Execute circuit using backend
-                              probs (let [execution-result (qb/execute-circuit backend final-circuit {:shots 1024})
+                              probs (let [execution-result (backend/execute-circuit backend final-circuit {:shots 1024})
                                           measurement-counts (:measurement-counts execution-result)
                                           num-qubits (:num-qubits final-circuit)
                                           num-states (int (m/pow 2 num-qubits))]
                                       ;; Convert counts to probabilities using proper bit string formatting
                                       (mapv (fn [i]
-                                              (let [bit-string (qs/basis-string i num-qubits)
+                                              (let [bit-string (state/basis-string i num-qubits)
                                                     count (get measurement-counts bit-string 0)]
                                                 (/ count 1024.0)))
                                             (range num-states)))
@@ -174,7 +174,7 @@
   (def test-training-data {:features test-features :labels test-labels})
 
   ;; Test cost function
-  (def test-ansatz (vqe/hardware-efficient-ansatz 2 1))
+  (def test-ansatz (ansatz/hardware-efficient-ansatz 2 1))
   (def test-params (vec (repeatedly 6 #(* 0.1 (rand)))))
 
   (classification-cost test-params test-ansatz test-features test-labels :simulator)
