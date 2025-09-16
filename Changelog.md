@@ -1,6 +1,6 @@
 # Changelog
 
 ## Version 0.1.0
-* added encodings namespace
-* added training namespace
+* added encodings
+* added training
 * added variational quantum classifier

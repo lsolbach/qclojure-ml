@@ -1,4 +1,4 @@
-(defproject org.soulspace/qclojure-ml "0.1.0-SNAPSHOT"
+(defproject org.soulspace/qclojure-ml "0.1.0"
   :description "Quantum Machine Learning algorithms for QClojure"
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
