@@ -1,8 +1,7 @@
 (ns org.soulspace.qclojure.ml.application.encoding-test
   (:require [clojure.test :refer [deftest is testing run-tests]]
-            [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
-            [org.soulspace.qclojure.application.ml.encoding :as enc]))
+            [org.soulspace.qclojure.ml.application.encoding :as enc]))
 
 ;; Test data generators
 (def feature-vector-gen
@@ -173,7 +172,7 @@
 ;; Helper function to run all tests
 (defn run-encoding-tests []
   (println "Running encoding tests...")
-  (run-tests 'org.soulspace.qclojure.application.ml.encoding-test))
+  (run-tests 'org.soulspace.qclojure.ml.application.encoding-test))
 
 ;; Rich comment block for REPL testing
 (comment

@@ -2,11 +2,10 @@
   (:require [clojure.test :refer [deftest is testing run-tests]]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
-            [org.soulspace.qclojure.application.ml.training :as training]
-            [org.soulspace.qclojure.application.algorithm.vqe :as vqe]
-            [org.soulspace.qclojure.application.backend :as qb]
-            [org.soulspace.qclojure.adapter.backend.simulator :as sim]
-            [org.soulspace.qclojure.domain.circuit :as qc]))
+            [org.soulspace.qclojure.ml.application.training :as training]
+            [org.soulspace.qclojure.application.algorithm.optimization :as opt]
+            [org.soulspace.qclojure.domain.ansatz :as ansatz]
+            [org.soulspace.qclojure.adapter.backend.ideal-simulator :as sim]))
 
 ;; Test data generators
 (def parameter-vector-gen
@@ -24,7 +23,7 @@
 (deftest test-classification-cost-validation
   (testing "Input validation with proper backend"
     (let [valid-params [0.1 0.2 0.3 0.4 0.5 0.6]
-          ansatz-fn (vqe/hardware-efficient-ansatz 2 1)
+          ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
           valid-features [[0.5 0.3] [0.7 0.1]]
           valid-labels [0 1]
           backend (sim/create-simulator)
@@ -37,7 +36,7 @@
   
   (testing "Error handling"
     (let [invalid-params []
-          ansatz-fn (vqe/hardware-efficient-ansatz 2 1)
+          ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
           valid-features [[0.5 0.3]]
           valid-labels [0]
           backend (sim/create-simulator)
@@ -48,25 +47,24 @@
       (is (= 1000.0 result) "Should return high cost on error"))))
 
 (deftest test-parameter-shift-gradient-validation
-  (testing "Parameter shift gradient validation"
+  (testing "Parameter shift gradient validation using optimization namespace"
     (let [cost-fn (fn [params] (+ (* (first params) (first params))
                                   (* (second params) (second params))))
           valid-params [0.1 0.2]
           
-          result (training/parameter-shift-gradient cost-fn valid-params)]
+          result (opt/calculate-parameter-shift-gradient cost-fn valid-params)]
       
-      (is (:success result) "Valid inputs should succeed")
-      (is (vector? (:result result)) "Should return vector of gradients")
-      (is (= (count (:result result)) (count valid-params)) "Gradient vector should match parameter count")))
+      (is (vector? result) "Should return vector of gradients")
+      (is (= (count result) (count valid-params)) "Gradient vector should match parameter count")))
   
-  (testing "Error cases"
+  (testing "Error cases handled by optimization namespace"
+    ;; The optimization namespace handles errors differently than the old training version
     (let [failing-cost-fn (fn [_] (throw (ex-info "Test error" {})))
-          valid-params [0.1 0.2]
-          
-          result (training/parameter-shift-gradient failing-cost-fn valid-params)]
+          valid-params [0.1 0.2]]
       
-      (is (not (:success result)) "Should fail with failing cost function")
-      (is (contains? result :error) "Should provide error message"))))
+      (is (thrown? Exception 
+                   (opt/calculate-parameter-shift-gradient failing-cost-fn valid-params))
+          "Should propagate exceptions from cost function"))))
 
 (deftest test-training-data-specs
   (testing "Training data spec validation"
@@ -82,7 +80,7 @@
     (let [features [[0.1 0.2] [0.3 0.4] [0.5 0.6] [0.7 0.8]]
           labels [0 0 1 1]
           training-data {:features features :labels labels}
-          ansatz-fn (vqe/hardware-efficient-ansatz 2 1)
+          ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
           backend (sim/create-simulator)
           
           config {:max-iterations 5
@@ -109,7 +107,7 @@
       
       (doseq [test-case test-cases]
         (when (= (count (:features test-case)) (count (:labels test-case)))
-          (let [ansatz-fn (vqe/hardware-efficient-ansatz 2 1)
+          (let [ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
                 backend (sim/create-simulator)
                 cost (try
                        (training/classification-cost 
@@ -127,7 +125,7 @@
 (deftest test-error-handling
   (testing "Various error conditions"
     (let [valid-params [0.1 0.2 0.3 0.4 0.5 0.6]
-          ansatz-fn (vqe/hardware-efficient-ansatz 2 1)
+          ansatz-fn (ansatz/hardware-efficient-ansatz 2 1)
           backend (sim/create-simulator)
           
           ; Test mismatched features and labels
@@ -162,7 +160,7 @@
   (let [backend (sim/create-simulator)]
     (training/classification-cost
      [0.1 0.2 0.3 0.4 0.5 0.6]
-     (vqe/hardware-efficient-ansatz 2 1)
+     (ansatz/hardware-efficient-ansatz 2 1)
      [[0.5 0.3] [0.7 0.1]]
      [0 1]
      backend))
@@ -171,6 +169,6 @@
   (s/valid? ::training/features [[1 2]])
   (s/explain ::training/features "invalid")
 
-  ;; Test parameter shift gradient
-  (training/parameter-shift-gradient (fn [p] (* (first p) (first p))) [0.5])
+  ;; Test parameter shift gradient (now in optimization namespace)
+  (opt/calculate-parameter-shift-gradient (fn [p] (* (first p) (first p))) [0.5])
   )

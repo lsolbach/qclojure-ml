@@ -82,7 +82,7 @@
    (amplitude-encoding [0.5 0.5 0.5 0.5] 2)"
   [feature-vector num-qubits]
   (let [fv-validation (validate-input ::feature-vector feature-vector "feature vector")
-        qb-validation (validate-input ::num-qubits num-qubits "qubit count")]
+        qb-validation (validate-input ::state/num-qubits num-qubits "qubit count")]
     (cond
       (not (:valid fv-validation))
       {:success false :error (:error fv-validation) :details (:details fv-validation)}
@@ -131,7 +131,7 @@
   ([data-row num-qubits] (angle-encoding data-row num-qubits :ry))
   ([data-row num-qubits gate-type]
    (let [data-validation (validate-input ::feature-vector data-row "data row")
-         qubits-validation (validate-input ::num-qubits num-qubits "qubit count")
+         qubits-validation (validate-input ::state/num-qubits num-qubits "qubit count")
          gate-validation (validate-input ::gate-type gate-type "gate type")]
      (cond
        (not (:valid data-validation))
@@ -186,7 +186,7 @@
    (basis-encoding \"101\" 3)  ; Creates |101> state
    (basis-encoding [1 0 1] 3)"
   [bit-string num-qubits]
-  (let [qubits-validation (validate-input ::num-qubits num-qubits "qubit count")
+  (let [qubits-validation (validate-input ::state/num-qubits num-qubits "qubit count")
         bit-string-validation (validate-input ::bit-string bit-string "bit string")]
     (cond
       (not (:valid qubits-validation))
