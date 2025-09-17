@@ -11,6 +11,10 @@
 (s/def ::feature-vector (s/coll-of ::feature-value :min-count 1 :kind vector?))
 (s/def ::normalized-vector (s/and ::feature-vector 
                                   #(every? (fn [x] (<= 0.0 x 1.0)) %)))
+
+;; Feature map type specification
+(s/def ::feature-map-type #{:amplitude :angle :basis :iqp})
+
 (s/def ::gate-type #{:rx :ry :rz})
 (s/def ::bit-vector (s/coll-of #{0 1} :kind vector?))  ; Renamed for clarity
 (s/def ::bit-string (s/or :string string? :vector ::bit-vector))  ; Accept both string and vector

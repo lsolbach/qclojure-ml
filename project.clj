@@ -3,7 +3,7 @@
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.12.2"]
-                 [org.soulspace/qclojure "0.17.0"]
+                 [org.soulspace/qclojure "0.18.0"]
                  [org.scicloj/noj "2-beta18"]
                  [org.scicloj/clay "2-beta52"]]
 

@@ -85,17 +85,14 @@
         ;; 1. Prepare ancilla in |+⟩ state
         (circuit/h-gate ancilla-qubit)
 
-        ;; 2. Apply controlled-SWAP operations
+        ;; 2. Apply controlled-SWAP operations using Fredkin gates
         ;; For each pair of qubits in the two registers
         ((fn [c]
            (reduce (fn [circuit-acc i]
                      (let [q1 (nth register1-qubits i)
                            q2 (nth register2-qubits i)]
-                       ;; Controlled-SWAP: control on ancilla, swap q1 and q2
-                       (-> circuit-acc
-                           (circuit/toffoli-gate ancilla-qubit q1 q2)  ; Control-CNOT for SWAP
-                           (circuit/toffoli-gate ancilla-qubit q2 q1)  ; Complete SWAP
-                           (circuit/toffoli-gate ancilla-qubit q1 q2))))
+                       ;; Fredkin gate: controlled-SWAP with ancilla as control
+                       (circuit/fredkin-gate circuit-acc ancilla-qubit q1 q2)))
                    c
                    (range num-data-qubits))))
 
@@ -271,17 +268,9 @@
                                      :qubits [ancilla-qubit]}}
 
         ;; Execute circuit with result specs
-        execution-result (backend/execute-circuit backend swap-test-circuit result-specs)
+        execution-result (backend/execute-circuit backend swap-test-circuit result-specs) 
         
-        ;; Extract the final state from nested structure and create compatible result format
-        final-state (get-in execution-result [:results :final-state])
-        compatible-result (if final-state
-                           {:final-state final-state}
-                           execution-result)
-        
-        ;; Extract measurements using QClojure result system
-        enhanced-result (result/extract-results compatible-result result-specs)
-        measurement-data (:measurement-results enhanced-result)]
+        measurement-data (get-in execution-result [:results :measurement-results])]
 
     (if (or (nil? measurement-data) (empty? (:measurement-outcomes measurement-data)))
       {:overlap-value 0.0
