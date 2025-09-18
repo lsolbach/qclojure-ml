@@ -58,6 +58,21 @@
                    ::initial-parameters ::max-iterations ::tolerance
                    ::optimization-method ::shots ::classification-type]))
 
+;;;
+;;; VQC-specific result specs following QAOA pattern
+;;;
+(s/def ::predicted-labels (s/coll-of nat-int? :kind vector?))
+(s/def ::class-probabilities (s/coll-of number? :kind vector?))
+(s/def ::classification-accuracy number?)
+(s/def ::confusion-matrix (s/coll-of (s/coll-of nat-int? :kind vector?) :kind vector?))
+(s/def ::precision number?)
+(s/def ::recall number?)
+(s/def ::f1-score number?)
+
+(s/def ::vqc-classification-result
+  (s/keys :req-un [::predicted-labels ::classification-accuracy]
+          :opt-un [::class-probabilities ::confusion-matrix ::precision ::recall ::f1-score]))
+
 ;; VQC implementation
 ;; * based on the variational algorithm template
 
@@ -172,10 +187,10 @@
         num-features (:num-features config)
         num-qubits (:num-qubits config (max 2 (int (Math/ceil (/ (Math/log num-features) (Math/log 2))))))
         num-layers (:num-layers config 1)
-        
+
         ;; Create feature map function
         feature-map-fn (create-feature-map feature-map-type num-features num-qubits config)
-        
+
         ;; Create ansatz function based on type
         ansatz-fn (case ansatz-type
                     :hardware-efficient
@@ -236,60 +251,70 @@
       :custom (count (:initial-parameters config)))))
 
 ;;;
-;;; VQC-specific result specs following QAOA pattern
-;;;
-(s/def ::predicted-labels (s/coll-of nat-int? :kind vector?))
-(s/def ::class-probabilities (s/coll-of number? :kind vector?))
-(s/def ::classification-accuracy number?)
-(s/def ::confusion-matrix (s/coll-of (s/coll-of nat-int? :kind vector?) :kind vector?))
-(s/def ::precision number?)
-(s/def ::recall number?)
-(s/def ::f1-score number?)
-
-(s/def ::vqc-classification-result
-  (s/keys :req-un [::predicted-labels ::classification-accuracy]
-          :opt-un [::class-probabilities ::confusion-matrix ::precision ::recall ::f1-score]))
-
-;;;
 ;;; Hardware-compatible measurement result extraction
 ;;;
 (defn extract-classification-from-measurements
   "Extract classification predictions from measurement frequency data.
   
-  This function converts raw measurement outcomes to classification predictions
-  using hardware-compatible frequency counting, similar to QAOA solution extraction.
+  This function converts measurement results to classification predictions.
   
   Parameters:
-  - measurement-frequencies: Map of measurement outcomes to counts
+  - measurement-result: measurement result map with :frequencies and :measurement-outcomes
   - num-classes: Number of classification classes
   - shots: Total number of measurement shots
   
   Returns:
   Map with classification probabilities and predicted label"
-  [measurement-frequencies num-classes shots]
-  (let [;; For binary classification, use simple thresholding
-        class-probs (if (= num-classes 2)
-                      ;; Binary: count |0⟩ and |1⟩ measurements
-                      (let [count-0 (get measurement-frequencies "0" 0)
-                            count-1 (get measurement-frequencies "1" 0)
-                            total-measured (+ count-0 count-1)]
-                        (if (> total-measured 0)
-                          [(/ count-0 total-measured) (/ count-1 total-measured)]
-                          [0.5 0.5]))
-                      
-                      ;; Multi-class: count measurement outcomes for each class
-                      (let [qubit-count (int (Math/ceil (/ (Math/log num-classes) (Math/log 2))))]
-                        (for [class-idx (range num-classes)]
-                          (let [basis-state (apply str (for [i (range qubit-count)]
-                                                         (if (bit-test class-idx i) "1" "0")))
-                                count (get measurement-frequencies basis-state 0)]
-                            (/ count shots)))))
+  [measurement-result num-classes shots]
+  {:pre [(map? measurement-result)
+         (contains? measurement-result :frequencies)
+         (pos-int? num-classes)
+         (pos-int? shots)]}
+  
+  (let [frequencies (:frequencies measurement-result)
+        ;; frequencies is a map from basis state indices (integers) to counts
+        ;; e.g. {0 400, 1 300, 2 200, 3 100} for 2-qubit system
         
-        ;; Predict class with highest probability
-        predicted-label (.indexOf class-probs (apply max class-probs))]
+        ;; Calculate class probabilities based on classification scheme
+        class-probs
+        (if (= num-classes 2)
+          ;; Binary classification: use first qubit (LSB of basis state index)
+          (let [count-0 (reduce + (for [[index count] frequencies
+                                        :when (even? index)]  ; even indices have LSB=0
+                                   count))
+                count-1 (reduce + (for [[index count] frequencies
+                                        :when (odd? index)]   ; odd indices have LSB=1
+                                   count))
+                total-measured (+ count-0 count-1)]
+            (if (> total-measured 0)
+              [(/ count-0 total-measured) (/ count-1 total-measured)]
+              [0.5 0.5]))  ; Uniform if no measurements
+          
+          ;; Multi-class: use direct index mapping
+          ;; For num-classes=3, we map indices 0->class0, 1->class1, 2->class2, rest->noise
+          (let [class-counts (vec (repeat num-classes 0))
+                total-measured (reduce + (vals frequencies))
+                class-counts-filled
+                (reduce (fn [counts [index count]]
+                          (if (< index num-classes)
+                            (update counts index + count)
+                            counts))  ; Ignore indices >= num-classes
+                        class-counts
+                        frequencies)]
+            (if (> total-measured 0)
+              (mapv #(/ % total-measured) class-counts-filled)
+              (vec (repeat num-classes (/ 1.0 num-classes))))))  ; Uniform if no measurements
+        
+        ;; Predict class with highest probability (handle ties by taking first)
+        max-prob (apply max class-probs)
+        predicted-label (.indexOf class-probs max-prob)]
     
     {:class-probabilities class-probs
-     :predicted-label predicted-label}))
+     :predicted-label predicted-label
+     :measurement-summary {:total-measurements (reduce + (vals frequencies))
+                           :unique-outcomes (count frequencies)
+                           :max-probability max-prob
+                           :frequencies frequencies}}))
 
 (defn calculate-classification-metrics
   "Calculate comprehensive classification metrics from predictions and true labels.
@@ -337,6 +362,8 @@
 ;;;
 ;;; Hardware-compatible VQC objective function using result specs
 ;;;
+;; TODO  should return the algorithm as a function that can be called with different parameters
+;;       to avoid circuit constructions on every call.
 (defn vqc-measurement-objective
   "Create a VQC objective function using hardware-compatible measurement result specs.
   
@@ -374,23 +401,19 @@
                               ;; Add measurement operations to circuit for hardware compatibility
                               measured-circuit (circuit/measure-all-operation circuit)
                               
-                              ;; Use result specs to request measurement frequencies
+                              ;; Execute circuit with proper result specs for measurement extraction
                               result-specs {:measurements {:shots shots}}
-                              options (assoc execution-options :result-specs result-specs)
+                              execution-result (backend/execute-circuit backend measured-circuit result-specs)
                               
-                              ;; Execute circuit with measurement result specs
-                              execution-result (backend/execute-circuit backend measured-circuit options)
-                              
-                              ;; Extract measurement frequencies from results
+                              ;; Extract measurement results using QClojure result system
                               measurement-results (get-in execution-result [:results :measurement-results])
-                              measurement-frequencies (if (map? measurement-results)
-                                                        measurement-results
-                                                        ;; Fallback: convert vector to frequency map
-                                                        (frequencies measurement-results))
                               
-                              ;; Extract classification from measurements
-                              classification (extract-classification-from-measurements 
-                                              measurement-frequencies num-classes shots)
+                              ;; Extract classification from measurement results
+                              classification (if measurement-results
+                                               (extract-classification-from-measurements 
+                                                measurement-results num-classes shots)
+                                               ;; Fallback for failed measurements
+                                               {:predicted-label 0 :class-probabilities (vec (repeat num-classes (/ 1.0 num-classes)))})
                               predicted-label (:predicted-label classification)]
                           
                           (conj acc predicted-label)))
@@ -524,14 +547,13 @@
   [backend options]
   {:pre [(s/valid? ::vqc-config options)]}
   
-  ;; For now, implement a simplified version that can be enhanced
-  ;; to use the full variational algorithm template
+  ;; Use the full variational algorithm template for proper optimization
   (let [;; Extract configuration
         training-data (:training-data options)
         num-classes (:num-classes options)
-        circuit-fn (vqc-circuit-constructor options)
         
-        ;; Create measurement-based objective
+        ;; Create measurement-based objective function
+        circuit-fn (vqc-circuit-constructor options)
         objective-fn (vqc-measurement-objective
                       training-data
                       circuit-fn
@@ -539,26 +561,28 @@
                       {:shots (:shots options 1024)}
                       num-classes)
         
-        ;; Initialize parameters
+        ;; Configure optimization parameters for QML
         num-params (vqc-parameter-count options)
-        initial-params (or (:initial-parameters options)
-                           (va/random-parameter-initialization num-params))
+        enhanced-options (merge {:optimization-method :adam
+                                 :max-iterations 100
+                                 :tolerance 1e-6
+                                 :gradient-tolerance 1e-4
+                                 :shots 1024
+                                 ;; QML-specific: small parameter ranges
+                                 :initial-parameters (or (:initial-parameters options)
+                                                         (va/random-parameter-initialization num-params :range [-0.1 0.1]))}
+                                options
+                                ;; Override with custom objective function
+                                {:objective-function objective-fn})
         
-        ;; Simple optimization (can be enhanced to use variational template)
-        start-time (System/currentTimeMillis)
-        initial-cost (objective-fn initial-params)
-        end-time (System/currentTimeMillis)
-        
-        ;; Create optimization result
-        optimization-result {:success true
-                             :optimal-parameters initial-params
-                             :optimal-energy initial-cost
-                             :iterations 1
-                             :function-evaluations 1
-                             :total-runtime-ms (- end-time start-time)}]
+        ;; Define algorithm-specific functions for variational template
+        algorithm-fns {:hamiltonian-constructor vqc-hamiltonian-constructor
+                       :circuit-constructor vqc-circuit-constructor
+                       :parameter-count vqc-parameter-count
+                       :result-processor vqc-result-processor}]
     
-    ;; Process results
-    (vqc-result-processor optimization-result options)))
+    ;; Use the full variational algorithm template
+    (va/variational-algorithm backend enhanced-options algorithm-fns)))
 
 ;;;
 ;;; Rich Comment Block for Interactive Development and Testing
