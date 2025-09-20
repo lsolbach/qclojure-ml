@@ -1036,6 +1036,9 @@
       
       (/ correct-predictions (count test-data)))))
 
+;; FIXME use (enhanced) variational algoritm template!!!
+;; FIXME should return the algorithm as a function that can be called with different parameters
+;;       to avoid circuit constructions on every call.
 (defn train-qnn
   "Train a QNN using variational optimization.
   
