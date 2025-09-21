@@ -1,3 +1,4 @@
+# Project Scope
 In this project we build a full featured, production ready Quantum Machine Learning library based on the QClojure quantum computing library, not some toy implementation.
 
 Don't implement simplified solutions, implement solutions that are correct and will run on real quantum hardware. Don't be lazy!
@@ -8,8 +9,7 @@ Double precision is used for the math, but we can switch to arbitrary precision 
 The backend protocol is the basis for the integration of real quantum computers, e.g. cloud based quantum services, and is used to run circuits.
 For visualization we focus on SVG and ASCII first.
 
-The QClojure codebase is available in the directory 'reference/qclojure'
-or as github repo 'lsolbach/qclojure'.
+The QClojure codebase is available in the directory 'reference/qclojure' or as github repo 'lsolbach/qclojure'.
 Some namespaces relevant to quantum machine learning in the QClojure codebase are
 * `org.soulspace.qclojure.domain.gate` - quantum gates
 * `org.soulspace.qclojure.domain.circuit` - quantum circuits
