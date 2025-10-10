@@ -1,11 +1,10 @@
-(defproject org.soulspace/qclojure-ml "0.1.0"
+(defproject org.soulspace/qclojure-ml "0.2.0-SNAPSHOT"
   :description "Quantum Machine Learning algorithms for QClojure"
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.12.2"]
-                 [org.soulspace/qclojure "0.18.0"]
-                 [org.scicloj/noj "2-beta18"]
-                 [org.scicloj/clay "2-beta52"]]
+  :dependencies [[org.clojure/clojure "1.12.3"]
+                 [org.soulspace/qclojure "0.19.0"]
+                 [org.scicloj/noj "2-beta18"]]
 
   :profiles {:dev [:user {}]
              :sim-heavy {:jvm-opts ["-Xms8g" "-Xmx32g"
