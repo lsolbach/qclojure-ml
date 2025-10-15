@@ -12,7 +12,7 @@
                                     "-XX:+AlwaysPreTouch"]}
              :container {:jvm-opts ["-XX:InitialRAMPercentage=2.0"
                                     "-XX:MaxRAMPercentage=60.0"]}
-             :clay {:dependencies [[org.scicloj/clay "2-beta56"]]
+             :clay {:dependencies [[org.scicloj/clay "2-beta57"]]
                     :source-paths ["src" "notebooks"]}} 
   
   :scm {:name "git" :url "https://github.com/lsolbach/qclojure-ml"}
