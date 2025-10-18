@@ -2,8 +2,8 @@
 
 ## Version (NEXT)
 * added quantum kernel methods
-* added qauntum neural networks
-* updated QClojure to version 0.18.0
+* added quantum neural networks
+* updated QClojure and Clay
 
 ## Version 0.1.0
 * added encodings
