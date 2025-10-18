@@ -21,12 +21,9 @@
   4. Support symmetric and asymmetric kernel computations"
  (:require [clojure.spec.alpha :as s]
            [fastmath.core :as fm]
-           [fastmath.complex :as fc]
            [org.soulspace.qclojure.application.backend :as backend]
            [org.soulspace.qclojure.domain.circuit :as circuit]
            [org.soulspace.qclojure.domain.state :as state]
-           [org.soulspace.qclojure.domain.result :as result]
-           [org.soulspace.qclojure.domain.math.complex-linear-algebra :as cla]
            [org.soulspace.qclojure.ml.application.encoding :as encoding]))
 
 ;;;
@@ -252,10 +249,10 @@
                                   (let [shifted-op (update op :operation-params
                                                            (fn [params]
                                                              (cond-> params
-                                                               (:qubit-target params)
-                                                               (update :qubit-target #(+ % num-qubits))
-                                                               (:qubit-control params)
-                                                               (update :qubit-control #(+ % num-qubits)))))]
+                                                               (:target params)
+                                                               (update :target #(+ % num-qubits))
+                                                               (:control params)
+                                                               (update :control #(+ % num-qubits)))))]
                                     (update c :operations conj shifted-op)))
                                 circuit-with-state1
                                 (:operations (encoder2 (circuit/create-circuit num-qubits))))
@@ -263,13 +260,13 @@
         ;; Apply SWAP test
         swap-test-circuit (swap-test-circuit shifted-circuit register1-qubits register2-qubits ancilla-qubit)
 
-        ;; Define result specifications for measurement extraction
-        result-specs {:measurements {:shots shots
-                                     :qubits [ancilla-qubit]}}
+        ;; Define options with result specifications for measurement extraction
+        options {:result-specs {:measurements {:shots shots
+                                                    :qubits [ancilla-qubit]}}}
 
-        ;; Execute circuit with result specs
-        execution-result (backend/execute-circuit backend swap-test-circuit result-specs) 
-        
+        ;; Execute circuit with result specs (wrapped in options map)
+        execution-result (backend/execute-circuit backend swap-test-circuit options)
+
         measurement-data (get-in execution-result [:results :measurement-results])]
 
     (if (or (nil? measurement-data) (empty? (:measurement-outcomes measurement-data)))
@@ -309,49 +306,47 @@
          _ (when-not (s/valid? ::kernel-config config)
              (throw (ex-info "Invalid kernel configuration"
                              {:config config
-                              :errors (s/explain-data ::kernel-config config)})))]
-
-     ;; Build kernel matrix row by row (avoiding complex transient nesting)
-     (let [matrix-rows
-           (mapv (fn [i]
-                   (let [data-point-i (nth data-matrix i)
-                         ;; For symmetric matrices, only compute upper triangle
-                         j-start (if symmetric? i 0)]
-                     
-                     ;; Compute row i
-                     (mapv (fn [j]
-                             (let [data-point-j (nth data-matrix j)]
-                               (cond
-                                 ;; Diagonal elements
-                                 (= i j) 1.0
-                                 
-                                 ;; Upper triangle (or all elements if not symmetric)
-                                 (or (not symmetric?) (>= j i))
-                                 (try
-                                   (let [overlap-result (quantum-kernel-overlap 
-                                                         backend data-point-i data-point-j config)]
-                                     (if (:error overlap-result)
-                                       0.0  ; Fallback for failed computations
-                                       (:overlap-value overlap-result)))
-                                   (catch Exception e
-                                     (println "Warning: kernel computation failed for" i j ":" (.getMessage e))
-                                     0.0))
-                                 
-                                 ;; Lower triangle for symmetric matrices
-                                 :else 0.0)))  ; Will be filled later
-                           (range n))))
-                 (range n))]
-
-       ;; For symmetric matrices, copy upper triangle to lower triangle
-       (if symmetric?
+                              :errors (s/explain-data ::kernel-config config)})))
+         ;; Build kernel matrix row by row (avoiding complex transient nesting)
+         matrix-rows
          (mapv (fn [i]
-                 (mapv (fn [j]
-                         (if (< j i)
-                           (get-in matrix-rows [j i])  ; Copy from upper triangle
-                           (get-in matrix-rows [i j])))
-                       (range n)))
-               (range n))
-         matrix-rows)))))
+                 (let [data-point-i (nth data-matrix i)
+                       ;; For symmetric matrices, only compute upper triangle
+                       j-start (if symmetric? i 0)]
+                   
+                   ;; Compute row i
+                   (mapv (fn [j]
+                           (let [data-point-j (nth data-matrix j)]
+                             (cond
+                               ;; Diagonal elements
+                               (= i j) 1.0
+
+                               ;; Upper triangle (or all elements if not symmetric)
+                               (or (not symmetric?) (>= j i))
+                               (try
+                                 (let [overlap-result (quantum-kernel-overlap
+                                                       backend data-point-i data-point-j config)]
+                                   (if (:error overlap-result)
+                                     0.0  ; Fallback for failed computations
+                                     (:overlap-value overlap-result)))
+                                 (catch Exception e
+                                   (println "Warning: kernel computation failed for" i j ":" (.getMessage e))
+                                   0.0))
+
+                               ;; Lower triangle for symmetric matrices
+                               :else 0.0)))  ; Will be filled later
+                         (range n))))
+               (range n))]
+     ;; For symmetric matrices, copy upper triangle to lower triangle
+     (if symmetric?
+       (mapv (fn [i]
+               (mapv (fn [j]
+                       (if (< j i)
+                         (get-in matrix-rows [j i])  ; Copy from upper triangle
+                         (get-in matrix-rows [i j])))
+                     (range n)))
+             (range n))
+       matrix-rows))))
 
 ;;;
 ;;; Optimized kernel computation strategies
@@ -508,6 +503,9 @@
 
 (comment
   ;; Example usage and testing
+  (require '[org.soulspace.qclojure.adapter.backend.ideal-simulator :as sim])
+  ;; 0. Initialize backend
+  (def backend (sim/create-simulator))
 
   ;; 1. Create sample data
   (def sample-data [[0.1 0.2] [0.8 0.9] [0.2 0.1] [0.9 0.8]])
@@ -517,23 +515,26 @@
     {:encoding-type :angle
      :num-qubits 2
      :shots 1024
-     :encoding-options {:gate-type :ry}}))
+     :encoding-options {:gate-type :ry}})
 
-;; 3. Test overlap computation between two points
-;; (def overlap-result (quantum-kernel-overlap backend (first sample-data) (second sample-data) kernel-config))
+  ;; 3. Test overlap computation between two points
+  (def overlap-result (quantum-kernel-overlap backend (first sample-data) (second sample-data) kernel-config))
 
-;; 4. Compute full kernel matrix
-;; (def kernel-matrix (quantum-kernel-matrix backend sample-data kernel-config))
+  ;; 4. Compute full kernel matrix
+  (def kernel-matrix (quantum-kernel-matrix backend sample-data kernel-config))
 
-;; 5. Analyze kernel matrix
-;; (analyze-kernel-matrix kernel-matrix)
+  ;; 5. Analyze kernel matrix
+  (analyze-kernel-matrix kernel-matrix)
 
-;; 6. Create kernel function for ML pipeline
-;; (def kernel-fn (create-quantum-kernel backend kernel-config))
-;; (kernel-fn [0.1 0.2] [0.8 0.9])
+  ;; 6. Create kernel function for ML pipeline
+  (def kernel-fn (create-quantum-kernel backend kernel-config))
+  (kernel-fn [0.1 0.2] [0.8 0.9])
 
-;; Expected properties:
-;; - Kernel matrix should be symmetric
-;; - Diagonal elements should be 1.0
-;; - All values should be between 0.0 and 1.0
-;; - Similar data points should have higher kernel values
+  ;; Expected properties:
+  ;; - Kernel matrix should be symmetric
+  ;; - Diagonal elements should be 1.0
+  ;; - All values should be between 0.0 and 1.0
+  ;; - Similar data points should have higher kernel values
+
+  ;
+  )
