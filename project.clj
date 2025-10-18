@@ -3,7 +3,7 @@
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.12.3"]
-                 [org.soulspace/qclojure "0.21.0"]
+                 [org.soulspace/qclojure "0.23.0-SNAPSHOT"]
                  [org.scicloj/noj "2-beta18"]]
 
   :profiles {:dev [:user {}]
@@ -12,7 +12,7 @@
                                     "-XX:+AlwaysPreTouch"]}
              :container {:jvm-opts ["-XX:InitialRAMPercentage=2.0"
                                     "-XX:MaxRAMPercentage=60.0"]}
-             :clay {:dependencies [[org.scicloj/clay "2-beta57"]]
+             :clay {:dependencies [[org.scicloj/clay "2.0.0"]]
                     :source-paths ["src" "notebooks"]}} 
   
   :scm {:name "git" :url "https://github.com/lsolbach/qclojure-ml"}
