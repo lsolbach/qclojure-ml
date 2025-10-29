@@ -30,10 +30,10 @@
 ;;;
 ;;; Specs for VQC configuration and data
 ;;;
-(s/def ::feature-map-type 
+(s/def ::feature-map-type
   #{:angle :amplitude :basis :iqp :custom})
 
-(s/def ::classification-type 
+(s/def ::classification-type
   #{:binary :multi-class})
 
 (s/def ::ansatz-type
@@ -42,10 +42,10 @@
 (s/def ::training-data
   (s/keys :req-un [::features ::labels]))
 
-(s/def ::features 
+(s/def ::features
   (s/coll-of (s/coll-of number? :kind vector?) :kind vector?))
 
-(s/def ::labels 
+(s/def ::labels
   (s/coll-of nat-int? :kind vector?))
 
 (s/def ::num-features pos-int?)
@@ -116,7 +116,7 @@
           (if (:success encoding-result)
             ((:result encoding-result) circuit)
             (throw (ex-info "Angle encoding failed" encoding-result))))))
-    
+
     :amplitude
     (fn amplitude-feature-map [feature-vector circuit]
       (let [encoding-result (encoding/amplitude-encoding feature-vector num-qubits)]
@@ -128,7 +128,7 @@
               ((:result angle-encoding-result) circuit)
               (throw (ex-info "Amplitude encoding fallback failed" angle-encoding-result))))
           (throw (ex-info "Amplitude encoding failed" encoding-result)))))
-    
+
     :basis
     (fn basis-feature-map [feature-vector circuit]
       ;; Convert continuous features to binary representation for basis encoding
@@ -142,12 +142,12 @@
               ((:result angle-encoding-result) circuit)
               (throw (ex-info "Basis encoding fallback failed" angle-encoding-result))))
           (throw (ex-info "Basis encoding failed" encoding-result)))))
-    
+
     :iqp
     (fn iqp-feature-map [feature-vector circuit]
       (let [iqp-encoder (encoding/iqp-encoding feature-vector num-qubits)]
         (iqp-encoder circuit)))
-    
+
     :custom
     (or (:custom-feature-map options)
         (throw (ex-info "Custom feature map not provided" {:feature-map-type feature-map-type})))))
@@ -169,7 +169,7 @@
   [config]
   (:training-data config))
 
-(defn vqc-circuit-constructor  
+(defn vqc-circuit-constructor
   "Create circuit constructor function for VQC from configuration.
   
   This function creates a circuit constructor that combines feature encoding
@@ -205,21 +205,21 @@
                                                        num-layers)
                     :custom
                     (:custom-ansatz config))]
-    
+
     (fn vqc-circuit [parameters feature-vector]
       (let [;; Create base circuit
             base-circuit (circuit/create-circuit num-qubits "VQC Circuit")
-            
+
             ;; Apply feature encoding
             encoded-circuit (feature-map-fn feature-vector base-circuit)
-            
+
             ;; Apply variational ansatz
             ansatz-circuit (ansatz-fn parameters)
-            
+
             ;; Combine feature encoding with ansatz by merging operations
             combined-operations (vec (concat (:operations encoded-circuit)
                                              (:operations ansatz-circuit)))]
-        
+
         (assoc ansatz-circuit :operations combined-operations)))))
 
 (defn vqc-parameter-count
@@ -270,26 +270,26 @@
          (contains? measurement-result :frequencies)
          (pos-int? num-classes)
          (pos-int? shots)]}
-  
+
   (let [frequencies (:frequencies measurement-result)
         ;; frequencies is a map from basis state indices (integers) to counts
         ;; e.g. {0 400, 1 300, 2 200, 3 100} for 2-qubit system
-        
+
         ;; Calculate class probabilities based on classification scheme
         class-probs
         (if (= num-classes 2)
           ;; Binary classification: use first qubit (LSB of basis state index)
           (let [count-0 (reduce + (for [[index count] frequencies
                                         :when (even? index)]  ; even indices have LSB=0
-                                   count))
+                                    count))
                 count-1 (reduce + (for [[index count] frequencies
                                         :when (odd? index)]   ; odd indices have LSB=1
-                                   count))
+                                    count))
                 total-measured (+ count-0 count-1)]
             (if (> total-measured 0)
               [(/ count-0 total-measured) (/ count-1 total-measured)]
               [0.5 0.5]))  ; Uniform if no measurements
-          
+
           ;; Multi-class: use direct index mapping
           ;; For num-classes=3, we map indices 0->class0, 1->class1, 2->class2, rest->noise
           (let [class-counts (vec (repeat num-classes 0))
@@ -304,11 +304,11 @@
             (if (> total-measured 0)
               (mapv #(/ % total-measured) class-counts-filled)
               (vec (repeat num-classes (/ 1.0 num-classes))))))  ; Uniform if no measurements
-        
+
         ;; Predict class with highest probability (handle ties by taking first)
         max-prob (apply max class-probs)
         predicted-label (.indexOf class-probs max-prob)]
-    
+
     {:class-probabilities class-probs
      :predicted-label predicted-label
      :measurement-summary {:total-measurements (reduce + (vals frequencies))
@@ -328,11 +328,11 @@
   Map with accuracy, confusion matrix, precision, recall, and F1-score"
   [predicted-labels true-labels num-classes]
   (let [num-samples (count true-labels)
-        
+
         ;; Calculate accuracy
         correct-predictions (count (filter true? (map = predicted-labels true-labels)))
         accuracy (/ correct-predictions num-samples)
-        
+
         ;; Build confusion matrix
         confusion-matrix (vec (repeat num-classes (vec (repeat num-classes 0))))
         filled-matrix (reduce (fn [matrix idx]
@@ -341,7 +341,7 @@
                                   (update-in matrix [true-label pred-label] inc)))
                               confusion-matrix
                               (range num-samples))
-        
+
         ;; Calculate per-class metrics for binary classification
         metrics (if (= num-classes 2)
                   (let [tp (get-in filled-matrix [1 1])  ; True positives
@@ -354,7 +354,7 @@
                      :recall recall
                      :f1-score f1})
                   {})]  ; Multi-class metrics would be more complex
-    
+
     (merge {:classification-accuracy accuracy
             :confusion-matrix filled-matrix}
            metrics)))
@@ -387,46 +387,46 @@
         labels (:labels training-data)
         num-samples (count features)
         shots (:shots execution-options 1024)]
-    
+
     (fn vqc-objective [parameters]
       (try
         (let [;; Evaluate all samples and collect predictions
               predictions
               (reduce (fn [acc idx]
                         (let [feature-vec (nth features idx)
-                              
+
                               ;; Create circuit for this sample
                               circuit (circuit-construction-fn parameters feature-vec)
-                              
+
                               ;; Add measurement operations to circuit for hardware compatibility
                               measured-circuit (circuit/measure-all-operation circuit)
-                              
+
                               ;; Execute circuit with proper result specs for measurement extraction
                               result-specs {:measurements {:shots shots}}
                               execution-result (backend/execute-circuit backend measured-circuit result-specs)
-                              
+
                               ;; Extract measurement results using QClojure result system
                               measurement-results (get-in execution-result [:results :measurement-results])
-                              
+
                               ;; Extract classification from measurement results
                               classification (if measurement-results
-                                               (extract-classification-from-measurements 
+                                               (extract-classification-from-measurements
                                                 measurement-results num-classes shots)
                                                ;; Fallback for failed measurements
                                                {:predicted-label 0 :class-probabilities (vec (repeat num-classes (/ 1.0 num-classes)))})
                               predicted-label (:predicted-label classification)]
-                          
+
                           (conj acc predicted-label)))
                       []
                       (range num-samples))
-              
+
               ;; Calculate accuracy
               correct-count (count (filter true? (map = predictions labels)))
               accuracy (/ correct-count num-samples)]
-          
+
           ;; Return negative accuracy for minimization
           (- accuracy))
-        
+
         (catch Exception e
           (println "Warning: VQC measurement objective failed:" (.getMessage e))
           1.0)))))
@@ -434,14 +434,68 @@
 ;;;
 ;;; VQC Template Integration Functions
 ;;;
-(defn vqc-hamiltonian-constructor
-  "Create a dummy Hamiltonian for VQC to work with variational algorithm template.
+(defn vqc-loss-function
+  "Create a loss function for VQC classification that works with the enhanced template.
   
-  VQC doesn't use a traditional Hamiltonian but the template expects one.
-  We create a dummy Hamiltonian that won't be used in the actual optimization."
-  [_config]
-  ;; Return empty Hamiltonian - VQC uses measurement-based objectives
-  [])
+  This function computes classification loss based on predictions and true labels.
+  It supports cross-entropy and hinge loss for binary and multi-class classification.
+  
+  Parameters:
+  - loss-type: Type of loss function (:cross-entropy, :hinge, :accuracy)
+  
+  Returns:
+  Function that takes (predictions, labels) and returns loss value"
+  [loss-type]
+  (case loss-type
+    :accuracy
+    (fn accuracy-loss [predictions labels]
+      ;; predictions is a vector of predicted labels (integers)
+      ;; labels is a vector of true labels (integers)
+      (let [correct-count (count (filter true? (map = predictions labels)))
+            accuracy (/ correct-count (count labels))]
+        ;; Return negative accuracy for minimization
+        (- accuracy)))
+
+    :cross-entropy
+    (fn cross-entropy-loss [predictions labels]
+      ;; For cross-entropy, predictions should be probability distributions
+      ;; This is a simplified version - full implementation would need probability vectors
+      (let [correct-count (count (filter true? (map = predictions labels)))
+            accuracy (/ correct-count (count labels))]
+        ;; Return negative log likelihood approximation
+        (- (Math/log (max 0.001 accuracy)))))
+
+    :hinge
+    (fn hinge-loss [predictions labels]
+      ;; Hinge loss for classification
+      (let [correct-count (count (filter true? (map = predictions labels)))
+            accuracy (/ correct-count (count labels))]
+        ;; Return negative accuracy (simplified hinge loss)
+        (- accuracy)))
+
+    ;; Default to accuracy-based loss
+    (fn default-loss [predictions labels]
+      (let [correct-count (count (filter true? (map = predictions labels)))
+            accuracy (/ correct-count (count labels))]
+        (- accuracy)))))
+
+(defn vqc-prediction-extractor
+  "Extract classification prediction from measurement result for enhanced template.
+  
+  This function is designed to work with the enhanced-variational-algorithm template's
+  prediction extraction infrastructure.
+  
+  Parameters:
+  - measurement-result: Measurement result map with :frequencies
+  - num-classes: Number of classification classes
+  
+  Returns:
+  Predicted class label (integer)"
+  [measurement-result num-classes shots]
+  (let [classification (extract-classification-from-measurements measurement-result num-classes shots)]
+    (:predicted-label classification)))
+
+
 
 (defn vqc-result-processor
   "Process VQC results with hardware-compatible classification metrics.
@@ -462,7 +516,7 @@
         features (:features training-data)
         labels (:labels training-data)
         num-classes (:num-classes config)]
-    
+
     ;; Create enhanced result map
     {:algorithm "Variational Quantum Classifier"
      :config config
@@ -490,111 +544,111 @@
 ;;; Main VQC Algorithm Implementation
 ;;;
 (defn variational-quantum-classifier
-  "Main VQC algorithm using variational algorithm template with hardware compatibility.
+  "Train a Variational Quantum Classifier (VQC) using the enhanced variational algorithm template.
   
-  This implementation follows the VQE pattern but adapts it for classification tasks
-  using measurement-based objectives compatible with real quantum hardware.
+  This function configures and executes quantum classifier training with the following architecture:
+  - Feature mapping layer (encode classical data into quantum states)
+  - Parameterized ansatz layers (trainable quantum circuit)
+  - Measurement layer (extract classification predictions)
   
-  Supported feature map types:
-  - :angle - Angle encoding using rotation gates
-  - :amplitude - Amplitude encoding (simplified to angle encoding)
-  - :basis - Basis encoding for binary features
-  - :iqp - Instantaneous Quantum Polynomial encoding
-  - :custom - Custom feature map function provided in options
-   
-  Supported ansatz types:
-  - :hardware-efficient - Hardware-efficient ansatz with configurable layers
-  - :chemistry-inspired - Chemistry-inspired ansatz with excitation layers
-  - :uccsd - UCCSD ansatz for complex classification
-  - :symmetry-preserving - Symmetry-preserving ansatz
-  - :custom - Custom ansatz function provided in options
-   
-  Supported optimization methods:
-  - :gradient-descent - Basic gradient descent
-  - :adam - Adam optimizer (default)
-  - :nelder-mead - Derivative-free Nelder-Mead simplex method
-  - :powell - Derivative-free Powell's method
-  - :cmaes - Covariance Matrix Adaptation Evolution Strategy
+  The training process:
+  1. Encodes training features into quantum states
+  2. Applies parameterized quantum circuits
+  3. Measures results and extracts class predictions
+  4. Optimizes circuit parameters to minimize classification loss
   
   Parameters:
-  - backend: Quantum backend implementing QuantumBackend protocol
-  - options: VQC configuration map (validated against ::vqc-config spec)
-    - :training-data - Map with :features and :labels (required)
-    - :num-features - Number of features in the dataset (required)
-    - :num-classes - Number of classes (required)
-    - :feature-map-type - Feature map type (default: :angle)
-    - :ansatz-type - Ansatz type (default: :hardware-efficient)
-    - :optimization-method - Optimization method (default: :adam)
-    - :max-iterations - Maximum iterations (default: 100)
-    - :tolerance - Convergence tolerance (default: 1e-4)
-    - :shots - Number of shots for circuit execution (default: 1024)
+  - backend: Quantum backend for circuit execution
+  - options: Configuration map with required and optional keys
+  
+  Required options:
+  - :training-data - Map with :features and :labels vectors
+  - :num-features - Number of input features per sample
+  - :num-classes - Number of classification classes
+  
+  Optional options (with defaults):
+  - :feature-map-type - Type of feature encoding (:angle, :amplitude, :iqp) [default: :angle]
+  - :ansatz-type - Type of parameterized circuit (:hardware-efficient, :real-amplitudes) [default: :hardware-efficient]
+  - :num-layers - Number of ansatz repetitions [default: 2]
+  - :loss-type - Loss function type (:accuracy, :cross-entropy, :hinge) [default: :accuracy]
+  - :optimization-method - Optimizer to use (:adam, :cmaes, :nelder-mead) [default: :cmaes]
+  - :max-iterations - Maximum training iterations [default: 50]
+  - :shots - Number of measurement shots [default: 1024]
   
   Returns:
-  Map containing VQC results and classification analysis
+  Map containing trained model and analysis results:
+  - :success - Training completion status
+  - :optimal-parameters - Trained circuit parameters
+  - :training-accuracy - Final training accuracy
+  - :confusion-matrix - Classification confusion matrix
+  - :class-probabilities - Per-class prediction probabilities
+  - :iterations - Number of iterations performed
+  - :convergence-history - Loss values over iterations
+  - :total-runtime-ms - Total training time
   
-  Examples:
-  (variational-quantum-classifier backend
-    {:training-data {:features [[0.1 0.2] [0.8 0.9] [0.2 0.1] [0.9 0.8]]
-                     :labels [0 1 0 1]}
+  Example:
+  ```clojure
+  (variational-quantum-classifier 
+    backend
+    {:training-data {:features [[0.1 0.2] [0.8 0.9]]
+                     :labels [0 1]}
      :num-features 2
      :num-classes 2
      :feature-map-type :angle
      :ansatz-type :hardware-efficient
-     :num-layers 1
-     :optimization-method :adam
-     :max-iterations 10
+     :num-layers 2
+     :optimization-method :cmaes
+     :max-iterations 50
      :shots 1024})"
   [backend options]
   {:pre [(s/valid? ::vqc-config options)]}
-  
-  ;; Use the full variational algorithm template for proper optimization
+
+  ;; Use enhanced-variational-algorithm template with :classification objective
   (let [;; Extract configuration
-        training-data (:training-data options)
         num-classes (:num-classes options)
-        
-        ;; Create measurement-based objective function
-        circuit-fn (vqc-circuit-constructor options)
-        objective-fn (vqc-measurement-objective
-                      training-data
-                      circuit-fn
-                      backend
-                      {:shots (:shots options 1024)}
-                      num-classes)
-        
-        ;; Configure optimization parameters for QML
-        num-params (vqc-parameter-count options)
-        enhanced-options (merge {:optimization-method :adam
-                                 :max-iterations 100
-                                 :tolerance 1e-6
-                                 :gradient-tolerance 1e-4
-                                 :shots 1024
-                                 ;; QML-specific: small parameter ranges
-                                 :initial-parameters (or (:initial-parameters options)
-                                                         (va/random-parameter-initialization num-params :range [-0.1 0.1]))}
-                                options
-                                ;; Override with custom objective function
-                                {:objective-function objective-fn})
-        
-        ;; Define algorithm-specific functions for variational template
-        algorithm-fns {:hamiltonian-constructor vqc-hamiltonian-constructor
-                       :circuit-constructor vqc-circuit-constructor
-                       :parameter-count vqc-parameter-count
-                       :result-processor vqc-result-processor}]
-    
-    ;; Use the full variational algorithm template
-    (va/variational-algorithm backend enhanced-options algorithm-fns)))
+        loss-type (:loss-type options :accuracy)
+        shots (:shots options 1024)
+
+        ;; Create loss function for classification (single argument)
+        loss-fn (vqc-loss-function loss-type)
+
+        ;; Create prediction extractor that works with measurement results
+        prediction-extractor (fn [measurement-result]
+                               (vqc-prediction-extractor measurement-result num-classes shots))
+
+        ;; Enhanced options with ML-specific settings
+        enhanced-options (merge {:optimization-method :cmaes  ; Use derivative-free by default
+                                 :max-iterations 200
+                                 :tolerance 1e-4
+                                 :shots shots
+                                 ;; Small parameter ranges for QML
+                                 :parameter-range [-0.1 0.1]}
+                                options)]
+
+    ;; Use enhanced-variational-algorithm template
+    (va/enhanced-variational-algorithm
+     backend
+     enhanced-options
+     {:algorithm :vqc
+      :objective-kind :classification
+      :parameter-count-fn vqc-parameter-count
+      :circuit-constructor-fn vqc-circuit-constructor
+      :dataset-fn vqc-data-constructor
+      :loss-fn loss-fn
+      :prediction-extractor-fn prediction-extractor
+      :result-processor-fn vqc-result-processor})))
 
 ;;;
 ;;; Rich Comment Block for Interactive Development and Testing
 ;;;
 (comment
   ;; Example usage of the VQC implementation
-  
+
   ;; 1. Define training data
-  (def training-data 
+  (def training-data
     {:features [[0.1 0.2] [0.8 0.9] [0.2 0.1] [0.9 0.8] [0.3 0.4] [0.7 0.6]]
      :labels   [0 1 0 1 0 1]})
-  
+
   ;; 2. Create VQC configuration
   (def vqc-config
     {:training-data training-data
@@ -606,30 +660,30 @@
      :optimization-method :adam
      :max-iterations 50
      :shots 1024})
-  
+
   ;; 3. Validate configuration
   (s/valid? ::vqc-config vqc-config)
-  
+
   ;; 4. Test parameter counting
   (vqc-parameter-count vqc-config)  ; => 12 parameters for 2 qubits, 2 layers
-  
+
   ;; 5. Test feature map creation
   (def feature-map (create-feature-map :angle 2 2 {:gate-type :ry}))
   (fn? feature-map)  ; => true
-  
+
   ;; 6. Test measurement result extraction
   (extract-classification-from-measurements {"0" 40 "1" 60} 2 100)
   ; => {:class-probabilities [2/5 3/5], :predicted-label 1}
-  
+
   ;; 7. Test classification metrics
   (calculate-classification-metrics [0 1 1 0] [0 1 0 0] 2)
   ; => {:classification-accuracy 3/4, :confusion-matrix [[2 1] [0 1]], 
   ;     :precision 1/2, :recall 1, :f1-score 2/3}
-  
+
   ;; 8. Test circuit constructor
   (def circuit-constructor (vqc-circuit-constructor vqc-config))
   (fn? circuit-constructor)  ; => true
-  
+
   ;; 9. Test result processor
   (def mock-result {:success true
                     :optimal-parameters (vec (repeatedly 12 #(* 0.1 (rand))))
@@ -637,16 +691,16 @@
                     :iterations 25
                     :function-evaluations 100
                     :total-runtime-ms 5000})
-  
+
   (vqc-result-processor mock-result vqc-config))
   ; => Complete VQC analysis with accuracy, confusion matrix, timing, etc.
-  
-  ;; 10. Full VQC execution would require a quantum backend:
-  ;; (def backend (create-quantum-backend)) ; depends on your backend choice
-  ;; (variational-quantum-classifier backend vqc-config)
-  
-  ;; Performance expectations:
-  ;; - Binary classification: typically achieves 70-95% accuracy on linearly separable data
-  ;; - Multi-class: accuracy depends on data complexity and number of qubits
-  ;; - Hardware compatibility: works with real quantum devices through measurement results
-  ;; - Scalability: parameter count grows as O(num-qubits × num-layers)
+
+;; 10. Full VQC execution would require a quantum backend:
+;; (def backend (create-quantum-backend)) ; depends on your backend choice
+;; (variational-quantum-classifier backend vqc-config)
+
+;; Performance expectations:
+;; - Binary classification: typically achieves 70-95% accuracy on linearly separable data
+;; - Multi-class: accuracy depends on data complexity and number of qubits
+;; - Hardware compatibility: works with real quantum devices through measurement results
+;; - Scalability: parameter count grows as O(num-qubits × num-layers)

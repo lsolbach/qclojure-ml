@@ -28,7 +28,8 @@
             [fastmath.core :as fm]
             [org.soulspace.qclojure.domain.circuit :as circuit]
             [org.soulspace.qclojure.domain.result :as result]
-            [org.soulspace.qclojure.domain.ansatz :as ansatz]
+            [org.soulspace.qclojure.domain.backend :as qb]
+            [org.soulspace.qclojure.domain.observable :as obs]
             [org.soulspace.qclojure.application.algorithm.variational-algorithm :as va]
             [org.soulspace.qclojure.ml.application.encoding :as encoding]
             [org.soulspace.qclojure.ml.application.training :as training]))
@@ -71,7 +72,7 @@
   (s/merge ::base-layer
            (s/keys :opt-un [::activation-type])))
 
-(s/def ::entangling-layer  
+(s/def ::entangling-layer
   (s/merge ::base-layer
            (s/keys :req-un [::entangling-pattern]
                    :opt-un [::entangling-options])))
@@ -109,7 +110,6 @@
 ;;;
 ;;; Layer Parameter Counting and Allocation
 ;;;
-
 (defn count-layer-parameters
   "Count the number of parameters needed for a specific layer type.
   
@@ -121,11 +121,11 @@
   [layer]
   (case (:layer-type layer)
     :input 0  ; Input layers typically don't have trainable parameters
-    
-    :dense 
+
+    :dense
     ;; Dense layer: 3 parameters per qubit (Rx, Ry, Rz rotations)
     (* 3 (:num-qubits layer))
-    
+
     :entangling
     ;; Entangling layer: parameters depend on pattern
     (case (:entangling-pattern layer :linear)  ; Default to :linear
@@ -135,7 +135,7 @@
                     (* n (dec n)))
       :custom (or (:custom-parameter-count layer) 0)
       (max 0 (dec (:num-qubits layer))))  ; Default to linear pattern
-    
+
     :activation
     ;; Activation layer: depends on activation type
     (case (:activation-type layer :quantum-tanh)  ; Default to :quantum-tanh
@@ -144,7 +144,7 @@
       :pauli-rotation (* 3 (:num-qubits layer))  ; 3 parameters per qubit
       :none 0
       (:num-qubits layer))  ; Default to 1 parameter per qubit
-    
+
     :measurement 0  ; Measurement layers don't have trainable parameters
     :output 0       ; Output layers don't have trainable parameters
     0))
@@ -178,7 +178,6 @@
 ;;;
 ;;; Layer Implementation Functions
 ;;;
-
 (defn apply-input-layer
   "Apply input layer (feature encoding) to a quantum circuit.
   
@@ -195,15 +194,15 @@
   (let [feature-map-type (:feature-map-type layer)
         encoding-options (:encoding-options layer {})
         num-qubits (:num-qubits layer)]
-    
+
     (case feature-map-type
       :angle
-      (let [encoding-result (encoding/angle-encoding feature-data num-qubits 
+      (let [encoding-result (encoding/angle-encoding feature-data num-qubits
                                                      (:gate-type encoding-options :ry))]
         (if (:success encoding-result)
           ((:result encoding-result) circuit)
           (throw (ex-info "Feature encoding failed" encoding-result))))
-      
+
       :amplitude
       (let [encoding-result (encoding/amplitude-encoding feature-data num-qubits)]
         (if (:success encoding-result)
@@ -214,7 +213,7 @@
               ((:result fallback-result) circuit)
               (throw (ex-info "Amplitude encoding fallback failed" fallback-result))))
           (throw (ex-info "Amplitude encoding failed" encoding-result))))
-      
+
       :basis
       (let [binary-data (mapv #(if (> % 0.5) 1 0) feature-data)
             encoding-result (encoding/basis-encoding binary-data num-qubits)]
@@ -227,11 +226,11 @@
                   circuit
                   (range (min (count binary-data) num-qubits)))
           (throw (ex-info "Basis encoding failed" encoding-result))))
-      
+
       :iqp
       (let [iqp-encoder (encoding/iqp-encoding feature-data num-qubits)]
         (iqp-encoder circuit))
-      
+
       (throw (ex-info "Unsupported feature map type" {:type feature-map-type})))))
 
 (defn apply-dense-layer
@@ -278,7 +277,7 @@
   {:pre [(s/valid? ::entangling-layer layer)]}
   (let [num-qubits (:num-qubits layer)
         pattern (:entangling-pattern layer)]
-    
+
     (case pattern
       :linear
       ;; Linear connectivity: 0-1, 1-2, 2-3, ...
@@ -287,15 +286,15 @@
          (circuit/cnot-gate c i (inc i)))
        circuit
        (range (dec num-qubits)))
-      
-      :circular  
+
+      :circular
       ;; Circular connectivity: 0-1, 1-2, ..., (n-1)-0
       (reduce
        (fn [c i]
          (circuit/cnot-gate c i (mod (inc i) num-qubits)))
        circuit
        (range num-qubits))
-      
+
       :all-to-all
       ;; All-to-all connectivity: every qubit connected to every other
       (reduce
@@ -306,7 +305,7 @@
              j (range num-qubits)
              :when (< i j)]
          [i j]))
-      
+
       :custom
       ;; Custom pattern - would need to be specified in layer configuration
       (let [custom-connections (:custom-connections layer [])]
@@ -315,7 +314,7 @@
            (circuit/cnot-gate c control target))
          circuit
          custom-connections))
-      
+
       ;; Default: no entanglement
       circuit)))
 
@@ -334,7 +333,7 @@
   {:pre [(s/valid? ::activation-layer layer)]}
   (let [num-qubits (:num-qubits layer)
         activation-type (:activation-type layer)]
-    
+
     (case activation-type
       :quantum-tanh
       ;; Quantum tanh using Ry rotations
@@ -344,7 +343,7 @@
            (circuit/ry-gate c qubit (fm/tanh angle))))
        circuit
        (range num-qubits))
-      
+
       :quantum-relu
       ;; Quantum ReLU approximation using conditional rotations
       (reduce
@@ -355,7 +354,7 @@
              c)))  ; No rotation for negative values
        circuit
        (range num-qubits))
-      
+
       :pauli-rotation
       ;; General Pauli rotations Rx, Ry, Rz
       (reduce
@@ -370,11 +369,11 @@
                (circuit/rz-gate qubit rz-angle))))
        circuit
        (range num-qubits))
-      
+
       :none
       ;; No activation - pass through
       circuit
-      
+
       ;; Default: no activation
       circuit)))
 
@@ -393,18 +392,18 @@
   {:pre [(s/valid? ::measurement-layer layer)]}
   (let [num-qubits (:num-qubits layer)
         measurement-basis (:measurement-basis layer)]
-    
+
     ;; For now, we'll add the measurement specification to the circuit metadata
     ;; The actual measurement will be handled by the backend during execution
     (case measurement-basis
       :computational
       ;; Standard computational basis measurement (default)
       circuit
-      
+
       :pauli-z
       ;; Pauli-Z measurement (same as computational)
       circuit
-      
+
       :pauli-x
       ;; Pauli-X measurement (need to rotate to X basis first)
       (reduce
@@ -412,7 +411,7 @@
          (circuit/h-gate c qubit))  ; H gate rotates Z basis to X basis
        circuit
        (range num-qubits))
-      
+
       :pauli-y
       ;; Pauli-Y measurement (need to rotate to Y basis first)
       ;; Using Ry(-π/2) to rotate Z basis to Y basis
@@ -423,14 +422,13 @@
              (circuit/h-gate qubit)))
        circuit
        (range num-qubits))
-      
+
       ;; Default: computational basis
       circuit)))
 
 ;;;
 ;;; Layer Dispatch Function
 ;;;
-
 (defn apply-layer
   "Apply a single QNN layer to a quantum circuit.
   
@@ -456,7 +454,6 @@
 ;;;
 ;;; Network Composition and Forward Pass
 ;;;
-
 (defn extract-layer-parameters
   "Extract parameters for a specific layer from the full parameter vector.
   
@@ -488,11 +485,11 @@
   [network feature-data parameters]
   {:pre [(s/valid? ::qnn-network network)
          (vector? parameters)]}
-  
+
   (let [;; Start with a base circuit sized for the network
         num-qubits (apply max (map :num-qubits network))
         initial-circuit (circuit/create-circuit num-qubits "QNN Forward Pass")]
-    
+
     ;; Apply each layer sequentially using reduce
     (reduce
      (fn [circuit layer]
@@ -521,46 +518,78 @@
 (defn qnn-forward-pass
   "Execute the forward pass of a QNN on a quantum backend.
   
-  This function executes the complete QNN circuit on a quantum backend and
-  returns the measurement results. It's the core execution function for QNN inference.
+  This function executes the complete QNN circuit on a quantum backend using
+  the proper backend protocol with result specifications. It returns measurement
+  results suitable for both classification and regression tasks.
+  
+  Production-ready implementation:
+  - Uses backend protocol's execute-circuit with result-specs
+  - Requests appropriate measurements for the task type
+  - Compatible with real quantum hardware and cloud services
   
   Parameters:
   - network: QNN network configuration
   - feature-data: Input feature vector
   - parameters: Network parameter vector
-  - backend: Quantum backend for execution
-  - options: Execution options (shots, measurement specs, etc.)
+  - backend: Quantum backend implementing QuantumBackend protocol
+  - options: Execution options map
+  
+  Options:
+  - :shots - Number of measurement shots (default: 1024)
+  - :task-type - :classification or :regression (default: :classification)
+  - :measurement-qubits - Qubits to measure (default: all output qubits)
+  - :observables - Observables for expectation value measurements (default: Pauli-Z)
   
   Returns:
-  Execution result from the quantum backend"
+  Execution result map from backend containing:
+  - :results - Result map with measurements, expectations, or probabilities
+  - :final-state - Final quantum state (if state-vector available)
+  - :execution-metadata - Backend execution metadata"
   [network feature-data parameters backend & {:keys [options] :or {options {}}}]
-  {:pre [(s/valid? ::qnn-network network)]}
-  
+  {:pre [(s/valid? ::qnn-network network)
+         (satisfies? qb/QuantumBackend backend)]}
+
   (let [circuit (apply-qnn-network network feature-data parameters)
         shots (:shots options 1024)
-        execution-options (merge {:shots shots} options)]
-    
-    ;; Execute the circuit using the QClojure execution system
-    ;; For production use, this would integrate with the backend protocol
+        task-type (:task-type options :classification)
+        num-qubits (:num-qubits circuit)
+
+        ;; Determine what results to request based on task type
+        result-specs (case task-type
+                       :classification
+                       ;; For classification, request measurement counts
+                       {:result-specs {:measurements {:shots shots
+                                                      :measurement-qubits (or (:measurement-qubits options)
+                                                                              (range num-qubits))}}}
+
+                       :regression
+                       ;; For regression, request expectation values
+                       {:result-specs {:measurements {:shots shots
+                                                      :measurement-qubits (or (:measurement-qubits options)
+                                                                              (range num-qubits))}}
+                        :expectation {:observables (or (:observables options)
+                                                       [obs/pauli-z])
+                                      :targets [0]}}  ; Measure output qubit
+
+                       ;; Default: measurements only
+                       {:result-specs {:measurements {:shots shots}}})
+
+        execution-options (merge options result-specs)]
+
+    ;; Execute circuit using backend protocol
     (try
-      (if backend
-        ;; If backend is provided, we should use it according to QClojure backend protocol
-        ;; For now, using basic execution - TODO: implement proper backend integration
-        (let [result (circuit/execute-circuit circuit)]
-          ;; Add measurement outcomes for compatibility with cost functions
-          (assoc result :outcomes {"0" (quot shots 2) "1" (quot shots 2)} :shots shots))
-        ;; Fallback to basic circuit execution
-        (circuit/execute-circuit circuit))
+      (qb/execute-circuit backend circuit execution-options)
       (catch Exception e
-        {:error "QNN forward pass execution failed"
-         :details (.getMessage e)
-         :circuit-info {:num-qubits (:num-qubits circuit)
-                        :num-operations (count (:operations circuit))}}))))
+        (throw (ex-info "QNN forward pass execution failed"
+                        {:network-depth (count network)
+                         :num-qubits num-qubits
+                         :num-operations (count (:operations circuit))
+                         :error-message (.getMessage e)}
+                        e))))))
 
 ;;;
 ;;; QNN Network Analysis and Utilities
 ;;;
-
 (defn analyze-qnn-network
   "Analyze a QNN network configuration and provide insights.
   
@@ -576,13 +605,13 @@
         total-qubits (apply max (map :num-qubits network))
         total-params (reduce + (map :parameter-count network))
         depth (count network)]
-    
+
     {:network-structure
      {:depth depth
       :total-qubits total-qubits
       :total-parameters total-params
       :layer-composition layer-counts}
-     
+
      :layer-analysis
      (mapv (fn [i layer]
              {:layer-index i
@@ -593,25 +622,25 @@
               :parameter-indices (:parameter-indices layer)})
            (range)
            network)
-     
+
      :complexity-metrics
      {:parameters-per-qubit (if (pos? total-qubits) (/ total-params total-qubits) 0)
       :layers-per-qubit (if (pos? total-qubits) (/ depth total-qubits) 0)
       :expressivity-score (* depth total-params)  ; Simple heuristic
       :hardware-efficiency (/ (count (filter #(= :entangling (:layer-type %)) network))
-                               (max 1 depth))}  ; Ratio of entangling layers
-     
+                              (max 1 depth))}  ; Ratio of entangling layers
+
      :recommendations
      (cond-> []
        (> total-params (* 3 total-qubits depth))
        (conj "Consider reducing parameters - high parameter/qubit ratio may lead to overparameterization")
-       
+
        (< (count (filter #(= :entangling (:layer-type %)) network)) 2)
        (conj "Consider adding more entangling layers for better expressivity")
-       
+
        (> depth 10)
        (conj "Very deep network - consider gradient issues and hardware noise")
-       
+
        (= 0 (count (filter #(= :activation (:layer-type %)) network)))
        (conj "No activation layers found - consider adding quantum activation functions"))}))
 
@@ -633,13 +662,13 @@
             (map-indexed
              (fn [i layer]
                (let [layer-symbol (case (:layer-type layer)
-                                   :input "📥"
-                                   :dense "🔶"
-                                   :entangling "🔗"
-                                   :activation "⚡"
-                                   :measurement "📊"
-                                   :output "📤"
-                                   "❓")
+                                    :input "📥"
+                                    :dense "🔶"
+                                    :entangling "🔗"
+                                    :activation "⚡"
+                                    :measurement "📊"
+                                    :output "📤"
+                                    "❓")
                      param-info (if (pos? (:parameter-count layer))
                                   (format " (%d params)" (:parameter-count layer))
                                   "")]
@@ -659,7 +688,6 @@
 ;;;
 ;;; QNN Configuration Helpers
 ;;;
-
 (defn create-feedforward-qnn
   "Create a standard feedforward QNN configuration.
   
@@ -675,13 +703,13 @@
                                :or {feature-map-type :angle
                                     activation-type :quantum-tanh}}]
   {:pre [(pos-int? num-qubits) (nat-int? hidden-layers)]}
-  
+
   (let [;; Input layer
         input-layer {:layer-type :input
                      :num-qubits num-qubits
                      :feature-map-type feature-map-type
                      :layer-name "Input Encoding"}
-        
+
         ;; Hidden layers (dense + entangling + activation)
         hidden-layer-sequence
         (mapcat
@@ -698,31 +726,30 @@
              :activation-type activation-type
              :layer-name (format "Activation Layer %d" (inc i))}])
          (range hidden-layers))
-        
+
         ;; Output layer
         output-layer {:layer-type :measurement
                       :num-qubits num-qubits
                       :measurement-basis :computational
                       :layer-name "Output Measurement"}
-        
+
         ;; Complete network with parameter counts
         add-param-count (fn [layer] (assoc layer :parameter-count (count-layer-parameters layer)))
         network-with-counts (mapv add-param-count
                                   (vec (concat [input-layer] hidden-layer-sequence [output-layer])))
-        
+
         ;; Complete network
         allocated-result (allocate-parameters network-with-counts)]
-    
+
     ;; Return just the network part (functions expect vector, not map)
     (:network allocated-result)))
 
 ;;;
 ;;; Layer Dispatch Function (moved here for logical grouping)
 ;;;
-
 (comment
   ;; Example QNN layer definitions
-  
+
   ;; Input layer with angle encoding
   (def input-layer
     {:layer-type :input
@@ -731,7 +758,7 @@
      :feature-map-type :angle
      :encoding-options {:gate-type :ry}
      :layer-name "Input Encoding"})
-  
+
   ;; Dense quantum layer
   (def dense-layer-1
     {:layer-type :dense
@@ -739,7 +766,7 @@
      :parameter-count 12  ; 3 parameters per qubit
      :activation-type :none
      :layer-name "Dense Layer 1"})
-  
+
   ;; Entangling layer
   (def entangling-layer
     {:layer-type :entangling
@@ -747,7 +774,7 @@
      :parameter-count 3   ; Linear pattern: 3 CNOT gates
      :entangling-pattern :linear
      :layer-name "Entangling Layer"})
-  
+
   ;; Activation layer
   (def activation-layer
     {:layer-type :activation
@@ -755,7 +782,7 @@
      :parameter-count 4   ; 1 parameter per qubit for quantum-tanh
      :activation-type :quantum-tanh
      :layer-name "Activation Layer"})
-  
+
   ;; Output measurement layer
   (def output-layer
     {:layer-type :measurement
@@ -763,7 +790,7 @@
      :parameter-count 0
      :measurement-basis :computational
      :layer-name "Output Measurement"})
-  
+
   ;; Example QNN network
   (def example-network
     [input-layer
@@ -771,86 +798,165 @@
      entangling-layer
      activation-layer
      output-layer])
-  
+
   ;; Test parameter allocation
   (def allocated-network (allocate-parameters example-network))
-  
+
   ;; Validate network structure
   (s/valid? ::qnn-network (:network allocated-network))
-  
+
   ;; Check total parameters
   (:total-parameters allocated-network))  ; Should be 19 parameters total
 
 ;;;
 ;;; QNN Training Integration
 ;;;
-
 (defn extract-expectation-value
   "Extract expectation value from quantum measurement results.
   
-  For classification, this typically computes <Z> expectation on output qubits.
-  For regression, it may compute weighted expectation values.
+  Production-ready implementation that properly handles result-specs format
+  from backend protocol execution. Works with both measurement-based expectations
+  and explicit expectation value results.
+  
+  For classification, computes <Z> expectation on output qubits.
+  For regression, uses explicit expectation values from backend.
   
   Parameters:
-  - result: Quantum execution result from backend
+  - result: Quantum execution result from backend with :results map
+  - options: Optional configuration map
+    - :observable-index - Index of observable to extract (default: 0)
+    - :use-measurements - Compute from measurements vs use explicit expectations
   
   Returns:
   Expectation value as a real number"
-  [result]
-  (if (:error result)
-    0.0  ; Default value for failed measurements
-    (let [;; Get measurement outcomes and counts
-          outcomes (:outcomes result {})
-          total-shots (reduce + (vals outcomes))
-          
-          ;; Compute Z expectation: E[Z] = (n_0 - n_1) / total_shots
-          ;; This assumes single-qubit measurement on qubit 0
-          n_0 (get outcomes "0" 0)
-          n_1 (get outcomes "1" 0)
-          expectation (if (pos? total-shots)
-                        (/ (- n_0 n_1) total-shots)
-                        0.0)]
-      
-      expectation)))
+  [result & {:keys [options] :or {options {}}}]
+  (let [observable-idx (:observable-index options 0)
+        results-map (:results result)
+
+        ;; Try explicit expectation values first (from :expectation result-spec)
+        expectations (:expectation results-map)
+        explicit-value (when expectations
+                         (get expectations observable-idx))
+
+        ;; Fall back to computing from measurements if no explicit expectation
+        measurements (:measurements results-map)
+        outcomes (:outcomes measurements)]
+
+    (cond
+      ;; Use explicit expectation value if available
+      (some? explicit-value)
+      explicit-value
+
+      ;; Compute Z expectation from measurement outcomes
+      (and outcomes (seq outcomes))
+      (let [total-shots (reduce + (vals outcomes))
+            ;; Compute Z expectation: E[Z] = (n_0 - n_1) / total_shots
+            ;; Assumes measurement on single output qubit
+            n_0 (get outcomes "0" 0)
+            n_1 (get outcomes "1" 0)]
+        (if (pos? total-shots)
+          (double (/ (- n_0 n_1) total-shots))
+          0.0))
+
+      ;; No valid results - indicate error
+      :else
+      (throw (ex-info "Cannot extract expectation value: no valid results available"
+                      {:result result
+                       :has-expectations (some? expectations)
+                       :has-measurements (some? measurements)})))))
 
 (defn extract-probability-distribution
   "Extract probability distribution from quantum measurement results.
   
+  Production-ready implementation that properly handles result-specs format
+  from backend protocol execution. Converts measurement counts to normalized
+  probabilities.
+  
   Parameters:
-  - result: Quantum execution result from backend
+  - result: Quantum execution result from backend with :results map
+  - options: Optional configuration map
+    - :num-states - Expected number of states (default: infer from outcomes)
+    - :normalize - Whether to normalize probabilities (default: true)
   
   Returns:
-  Vector of probabilities for each computational basis state"
-  [result]
-  (if (:error result)
-    [0.5 0.5]  ; Default uniform distribution for failed measurements
-    (let [outcomes (:outcomes result {})
-          total-shots (reduce + (vals outcomes))
-          
-          ;; Convert counts to probabilities
-          probabilities (if (pos? total-shots)
-                          (mapv #(/ (get outcomes (str %) 0) total-shots)
-                                (range (count outcomes)))
-                          (vec (repeat (count outcomes) (/ 1.0 (count outcomes)))))]
-      
-      probabilities)))
+  Vector of probabilities for each computational basis state, sorted by
+  bitstring value (e.g., [p(\"00\"), p(\"01\"), p(\"10\"), p(\"11\")])"
+  [result & {:keys [options] :or {options {}}}]
+  (let [results-map (:results result)
+        measurements (:measurements results-map)
+        outcomes (:outcomes measurements)
+        total-shots (when outcomes (reduce + (vals outcomes)))
+        num-states (:num-states options)
+        normalize? (:normalize options true)]
+
+    (cond
+      ;; No valid measurement outcomes
+      (or (nil? outcomes) (empty? outcomes))
+      (throw (ex-info "Cannot extract probability distribution: no measurement outcomes"
+                      {:result result
+                       :has-results (some? results-map)
+                       :has-measurements (some? measurements)}))
+
+      ;; Convert counts to probabilities
+      :else
+      (let [;; Determine number of states from outcomes or option
+            inferred-states (or num-states
+                                (count outcomes))
+
+            ;; Build probability vector sorted by bitstring
+            state-probs (into (sorted-map)
+                              (map (fn [[state count]]
+                                     [state (if (and normalize? (pos? total-shots))
+                                              (double (/ count total-shots))
+                                              count)])
+                                   outcomes))
+
+            ;; Convert to vector
+            prob-vec (mapv (fn [i]
+                             (let [bitstring (format "%s" i)]
+                               (get state-probs bitstring 0.0)))
+                           (range inferred-states))]
+
+        prob-vec))))
 
 (defn extract-most-probable-state
   "Extract the most probable computational basis state.
   
+  Production-ready implementation that properly handles result-specs format
+  from backend protocol execution. Finds the bitstring with the highest
+  measurement count.
+  
   Parameters:
-  - result: Quantum execution result from backend
+  - result: Quantum execution result from backend with :results map
+  - options: Optional configuration map
+    - :return-count - Also return the count (default: false)
   
   Returns:
-  String representing the most probable bitstring"
-  [result]
-  (if (:error result)
-    "0"  ; Default state for failed measurements
-    (let [outcomes (:outcomes result {})]
-      (if (empty? outcomes)
-        "0"
-        ;; Find state with maximum count
-        (key (apply max-key val outcomes))))))
+  String representing the most probable bitstring, or
+  [bitstring count] if :return-count is true"
+  [result & {:keys [options] :or {options {}}}]
+  (let [results-map (:results result)
+        measurements (:measurements results-map)
+        outcomes (:outcomes measurements)
+        return-count? (:return-count options false)]
+
+    (cond
+      ;; No valid measurement outcomes
+      (or (nil? outcomes) (empty? outcomes))
+      (throw (ex-info "Cannot extract most probable state: no measurement outcomes"
+                      {:result result
+                       :has-results (some? results-map)
+                       :has-measurements (some? measurements)}))
+
+      ;; Find state with maximum count
+      :else
+      (let [max-entry (apply max-key val outcomes)
+            max-state (key max-entry)
+            max-count (val max-entry)]
+
+        (if return-count?
+          [max-state max-count]
+          max-state)))))
 
 (defn compute-loss
   "Compute loss between prediction and true label.
@@ -864,27 +970,27 @@
   Loss value as a real number"
   [prediction label loss-type]
   (case loss-type
-    :mse 
+    :mse
     ;; Mean squared error for regression
     (let [pred-value (if (number? prediction) prediction (first prediction))
           diff (- pred-value label)]
       (* diff diff))
-    
+
     :cross-entropy
     ;; Cross-entropy for classification
     (let [prob-dist (if (vector? prediction) prediction [prediction (- 1.0 prediction)])
           label-idx (int label)
           prob (nth prob-dist label-idx 1e-10)]  ; Avoid log(0)
       (- (Math/log (max prob 1e-10))))
-    
+
     :hinge
     ;; Hinge loss for binary classification
-    (let [pred-value (if (number? prediction) prediction 
+    (let [pred-value (if (number? prediction) prediction
                          (- (first prediction) (second prediction)))
           label-value (if (= label 0) -1.0 1.0)
           margin (* label-value pred-value)]
       (max 0.0 (- 1.0 margin)))
-    
+
     :accuracy
     ;; Negative accuracy (for maximization via minimization)
     (let [predicted-label (if (string? prediction)
@@ -892,7 +998,7 @@
                             (if (> (first prediction) 0.5) 1 0))
           correct? (= predicted-label (int label))]
       (if correct? 0.0 1.0))
-    
+
     ;; Default: MSE
     (let [pred-value (if (number? prediction) prediction (first prediction))
           diff (- pred-value label)]
@@ -917,38 +1023,38 @@
   {:pre [(s/valid? ::qnn-network network)
          (vector? training-data)
          (every? #(and (contains? % :features) (contains? % :label)) training-data)]}
-  
+
   (let [shots (:shots options 1024)
         measurement-strategy (:measurement-strategy options :expectation)]
-    
+
     (fn qnn-cost-function [parameters]
       (try
         ;; Compute loss over all training examples
-        (let [total-loss 
+        (let [total-loss
               (reduce
                (fn [acc-loss {:keys [features label]}]
                  (let [;; Execute QNN forward pass
                        result (qnn-forward-pass network features parameters backend :options options)
-                       
+
                        ;; Extract prediction from quantum measurement
                        prediction (case measurement-strategy
-                                   :expectation (extract-expectation-value result)
-                                   :probability (extract-probability-distribution result)
-                                   :bitstring (extract-most-probable-state result)
-                                   result)
-                       
+                                    :expectation (extract-expectation-value result)
+                                    :probability (extract-probability-distribution result)
+                                    :bitstring (extract-most-probable-state result)
+                                    result)
+
                        ;; Compute loss for this example
                        example-loss (compute-loss prediction label loss-type)]
-                   
+
                    (+ acc-loss example-loss)))
                0.0
                training-data)
-              
+
               ;; Average loss over training set
               avg-loss (/ total-loss (count training-data))]
-          
+
           avg-loss)
-        
+
         (catch Exception e
           ;; Return high loss for failed evaluations
           (println "Warning: Cost function evaluation failed:" (.getMessage e))
@@ -970,14 +1076,14 @@
   [cost-fn initial-params options]
   (let [max-iter (:max-iterations options 50)
         tolerance (:tolerance options 1e-6)]
-    
+
     ;; Simple random search for demonstration
     ;; Real implementation would use proper optimization algorithms
     (loop [iteration 0
            best-params initial-params
            best-cost (cost-fn initial-params)
            history []]
-      
+
       (if (or (>= iteration max-iter)
               (< best-cost tolerance))
         ;; Return optimization result
@@ -985,13 +1091,13 @@
          :final-cost best-cost
          :iterations iteration
          :history (conj history {:iteration iteration :cost best-cost})}
-        
+
         ;; Try random perturbation
         (let [;; Small random perturbations
               perturbation (mapv (fn [_param] (* 0.1 (- (rand 2.0) 1.0))) initial-params)
               new-params (mapv + best-params perturbation)
               new-cost (cost-fn new-params)]
-          
+
           (if (< new-cost best-cost)
             ;; Accept improvement
             (recur (inc iteration)
@@ -1033,93 +1139,335 @@
                  correct)))  ; Count as incorrect if evaluation fails
            0
            test-data)]
-      
+
       (/ correct-predictions (count test-data)))))
 
 ;; FIXME use (enhanced) variational algoritm template!!!
 ;; FIXME should return the algorithm as a function that can be called with different parameters
 ;;       to avoid circuit constructions on every call.
-(defn train-qnn
-  "Train a QNN using variational optimization.
+(defn qnn-dataset-constructor
+  "Extract training data from QNN options for the variational algorithm template.
   
-  This function integrates with the QClojure variational algorithm template
-  to optimize QNN parameters using gradient-free optimization methods.
+  This function adapts the QNN data format to work with the variational algorithm template,
+  which expects a dataset source.
   
   Parameters:
-  - network: QNN network configuration
-  - training-data: Training dataset as vector of {:features [...] :label ...}
-  - backend: Quantum backend for execution
-  - options: Training options map
+  - options: QNN training options containing :training-data
   
-  Options:
-  - :optimizer - Optimization method (:adam, :gradient-descent, :nelder-mead, etc.)
-  - :loss-type - Loss function (:mse, :cross-entropy, :hinge, :accuracy)
-  - :max-iterations - Maximum training iterations
-  - :learning-rate - Learning rate for gradient-based methods
-  - :tolerance - Convergence tolerance
-  - :shots - Number of quantum circuit shots per evaluation
+  Returns:
+  Training data vector"
+  [options]
+  (:training-data options))
+
+(defn qnn-parameter-count
+  "Calculate required parameter count for QNN network.
+  
+  This function determines how many parameters are needed for the complete
+  QNN network by summing parameters across all layers.
+  
+  Parameters:
+  - options: QNN training options containing :network
+  
+  Returns:
+  Total number of parameters required"
+  [options]
+  (let [network (:network options)]
+    (reduce + (map :parameter-count network))))
+
+(defn qnn-circuit-constructor-adapter
+  "Create circuit constructor function for QNN from options.
+  
+  This function creates a circuit constructor that works with the enhanced
+  variational template. The resulting function takes parameters and a feature
+  vector, returning a complete QNN circuit.
+  
+  Parameters:
+  - options: QNN training options containing :network
+  
+  Returns:
+  Function that takes (parameters, feature-vector) and returns a quantum circuit"
+  [options]
+  (let [network (:network options)]
+    (create-qnn-circuit-constructor network)))
+
+(defn qnn-result-processor
+  "Process QNN training results with ML-specific metrics.
+  
+  This processor extracts ML performance metrics from the optimization results
+  and adds QNN-specific analysis.
+  
+  Parameters:
+  - optimization-result: Result from variational optimization
+  - options: QNN training options
+  
+  Returns:
+  Enhanced result map with QNN metrics"
+  [optimization-result options]
+  (let [optimal-params (:optimal-parameters optimization-result)
+        task-type (:task-type options :classification)
+        loss-type (:loss-type options (if (= task-type :classification) :accuracy :mse))
+        optimal-loss (if (= task-type :classification)
+                       (- (:optimal-energy optimization-result))  ; Convert from negative accuracy
+                       (:optimal-energy optimization-result))
+        network (:network options)
+        training-data (:training-data options)]
+
+    {:success (:success optimization-result)
+     :optimal-parameters optimal-params
+     :final-loss optimal-loss
+     :final-accuracy (when (= task-type :classification) optimal-loss)
+     :iterations (:iterations optimization-result)
+     :function-evaluations (:function-evaluations optimization-result)
+     :convergence-history (:convergence-history optimization-result)
+     :total-runtime-ms (:total-runtime-ms optimization-result 0)
+     :network-info {:total-parameters (reduce + (map :parameter-count network))
+                    :network-depth (count network)
+                    :num-qubits (apply max (map :num-qubits network))}
+     :training-info {:num-samples (count training-data)
+                     :task-type task-type
+                     :loss-type loss-type}
+     :optimization-method (:optimization-method options :cmaes)}))
+
+(defn qnn-prediction-extractor
+  "Extract prediction from QNN measurement result for enhanced template.
+  
+  This function is designed to work with the enhanced-variational-algorithm template's
+  prediction extraction infrastructure. It handles both classification and regression.
+  
+  Parameters:
+  - measurement-result: Measurement result map
+  - task-type: Type of ML task (:classification or :regression)
+  - measurement-strategy: How to extract predictions (:expectation, :probability, :bitstring)
+  - shots: Number of measurement shots
+  
+  Returns:
+  Predicted value (integer for classification, float for regression)"
+  [measurement-result task-type measurement-strategy shots]
+  (case task-type
+    :classification
+    (case measurement-strategy
+      :bitstring
+      ;; Extract most probable state as classification label
+      (let [most-probable (extract-most-probable-state measurement-result)]
+        (Integer/parseInt most-probable))
+
+      :expectation
+      ;; Use expectation value, threshold at 0.5 for binary classification
+      (let [expectation (extract-expectation-value measurement-result)]
+        (if (> expectation 0.5) 1 0))
+
+      :probability
+      ;; Use probability distribution to find most likely class
+      (let [probs (extract-probability-distribution measurement-result)
+            max-idx (.indexOf probs (apply max probs))]
+        max-idx)
+
+      ;; Default: bitstring extraction
+      (let [most-probable (extract-most-probable-state measurement-result)]
+        (Integer/parseInt most-probable)))
+
+    :regression
+    (case measurement-strategy
+      :expectation
+      ;; For regression, use expectation value directly
+      (extract-expectation-value measurement-result)
+
+      :probability
+      ;; Weighted average of states for regression
+      (let [probs (extract-probability-distribution measurement-result)]
+        (reduce + (map-indexed (fn [idx prob] (* idx prob)) probs)))
+
+      ;; Default: expectation value
+      (extract-expectation-value measurement-result))
+
+    ;; Default: classification with bitstring
+    (let [most-probable (extract-most-probable-state measurement-result)]
+      (Integer/parseInt most-probable))))
+
+(defn qnn-loss-function
+  "Create a loss function for QNN that works with the enhanced variational template.
+  
+  This function creates loss functions suitable for both classification and regression
+  tasks in quantum neural networks. It computes loss based on predictions and labels/targets.
+  
+  Parameters:
+  - loss-type: Type of loss function (:mse, :cross-entropy, :hinge, :accuracy)
+  - task-type: Type of ML task (:classification or :regression)
+  
+  Returns:
+  Function that takes (predictions, labels) and returns loss value"
+  [loss-type task-type]
+  (case task-type
+    :classification
+    (case loss-type
+      :accuracy
+      (fn accuracy-loss [predictions labels]
+        ;; predictions is a vector of predicted labels (integers)
+        ;; labels is a vector of true labels (integers)
+        (let [correct-count (count (filter true? (map = predictions labels)))
+              accuracy (/ correct-count (count labels))]
+          ;; Return negative accuracy for minimization
+          (- accuracy)))
+
+      :cross-entropy
+      (fn cross-entropy-loss [predictions labels]
+        ;; For cross-entropy, predictions should be probability distributions
+        ;; This is a simplified version - full implementation would need probability vectors
+        (let [correct-count (count (filter true? (map = predictions labels)))
+              accuracy (/ correct-count (count labels))]
+          ;; Return negative log likelihood approximation
+          (- (Math/log (max 0.001 accuracy)))))
+
+      :hinge
+      (fn hinge-loss [predictions labels]
+        ;; Hinge loss for classification
+        (let [correct-count (count (filter true? (map = predictions labels)))
+              accuracy (/ correct-count (count labels))]
+          ;; Return negative accuracy (simplified hinge loss)
+          (- accuracy)))
+
+      ;; Default to accuracy-based loss
+      (fn default-loss [predictions labels]
+        (let [correct-count (count (filter true? (map = predictions labels)))
+              accuracy (/ correct-count (count labels))]
+          (- accuracy))))
+
+    :regression
+    (case loss-type
+      :mse
+      (fn mse-loss [predictions targets]
+        ;; Mean squared error for regression
+        (let [squared-errors (map (fn [pred target]
+                                    (let [diff (- pred target)]
+                                      (* diff diff)))
+                                  predictions targets)
+              mse (/ (reduce + squared-errors) (count predictions))]
+          mse))
+
+      :mae
+      (fn mae-loss [predictions targets]
+        ;; Mean absolute error for regression
+        (let [absolute-errors (map (fn [pred target]
+                                     (Math/abs (- pred target)))
+                                   predictions targets)
+              mae (/ (reduce + absolute-errors) (count predictions))]
+          mae))
+
+      ;; Default to MSE
+      (fn default-mse-loss [predictions targets]
+        (let [squared-errors (map (fn [pred target]
+                                    (let [diff (- pred target)]
+                                      (* diff diff)))
+                                  predictions targets)
+              mse (/ (reduce + squared-errors) (count predictions))]
+          mse)))
+
+    ;; Default: assume classification with accuracy loss
+    (fn default-accuracy-loss [predictions labels]
+      (let [correct-count (count (filter true? (map = predictions labels)))
+            accuracy (/ correct-count (count labels))]
+        (- accuracy)))))
+
+(defn train-qnn
+  "Train a QNN using the enhanced variational algorithm template.
+  
+  This function configures and executes quantum neural network training with support
+  for both classification and regression tasks. The QNN is trained using the enhanced
+  variational algorithm template with ML-specific objective handling.
+  
+  The training process:
+  1. Encodes training features into quantum states via input layers
+  2. Applies parameterized quantum layers (dense, entangling, activation)
+  3. Measures results and extracts predictions
+  4. Optimizes network parameters to minimize task-specific loss
+  
+  Parameters:
+  - backend: Quantum backend for circuit execution
+  - options: Configuration map with required and optional keys
+  
+  Required options:
+  - :network - QNN network configuration (vector of layer maps)
+  - :training-data - Vector of {:features [...] :label ...} maps
+  
+  Optional options (with defaults):
+  - :task-type - ML task type (:classification or :regression) [default: :classification]
+  - :loss-type - Loss function (:accuracy, :cross-entropy, :hinge, :mse, :mae) 
+                 [default: :accuracy for classification, :mse for regression]
+  - :measurement-strategy - How to extract predictions (:expectation, :probability, :bitstring)
+                           [default: :bitstring for classification, :expectation for regression]
+  - :optimization-method - Optimizer to use (:cmaes, :nelder-mead, :powell, :adam)
+                          [default: :cmaes]
+  - :max-iterations - Maximum training iterations [default: 100]
+  - :tolerance - Convergence tolerance [default: 1e-6]
+  - :shots - Number of measurement shots [default: 1024]
   - :initial-parameters - Initial parameter values (random if not provided)
   
   Returns:
-  Training result map with optimized parameters and training history"
-  [network training-data backend & {:keys [options] :or {options {}}}]
-  {:pre [(s/valid? ::qnn-network network)
-         (vector? training-data)
-         (not-empty training-data)]}
+  Map containing trained model and analysis results:
+  - :success - Training completion status
+  - :optimal-parameters - Trained network parameters
+  - :final-loss - Final loss value
+  - :final-accuracy - Final accuracy (for classification tasks)
+  - :iterations - Number of iterations performed
+  - :convergence-history - Loss values over iterations
+  - :total-runtime-ms - Total training time
+  - :network-info - Network architecture details
+  - :training-info - Training configuration summary
   
-  (let [;; Extract training options
-        optimizer (:optimizer options :nelder-mead)
-        loss-type (:loss-type options :mse)
-        max-iterations (:max-iterations options 100)
-        learning-rate (:learning-rate options 0.1)
-        tolerance (:tolerance options 1e-6)
+  Example:
+  ```clojure
+  (train-qnn 
+    backend
+    {:network qnn-network
+     :training-data [{:features [0.1 0.2] :label 0}
+                     {:features [0.8 0.9] :label 1}]
+     :task-type :classification
+     :loss-type :accuracy
+     :optimization-method :cmaes
+     :max-iterations 100
+     :shots 1024})"
+  [backend options]
+  {:pre [(s/valid? ::qnn-network (:network options))
+         (vector? (:training-data options))
+         (not-empty (:training-data options))]}
+
+  ;; Use enhanced-variational-algorithm template with :classification or :regression objective
+  (let [;; Extract configuration
+        task-type (:task-type options :classification)
+        loss-type (:loss-type options (if (= task-type :classification) :accuracy :mse))
+        measurement-strategy (:measurement-strategy options
+                                                    (if (= task-type :classification) :bitstring :expectation))
         shots (:shots options 1024)
-        
-        ;; Determine parameter count
-        total-params (reduce + (map :parameter-count network))
-        
-        ;; Initialize parameters
-        initial-params (or (:initial-parameters options)
-                           (vec (repeatedly total-params #(rand 2.0))))  ; Random [0, 2π]
-        
-        ;; Create cost function
-        cost-fn (create-qnn-cost-function network training-data backend loss-type
-                                          :options {:shots shots})
-        
-        ;; Training options for variational algorithm
-        training-opts {:optimizer optimizer
-                       :max-iterations max-iterations
-                       :learning-rate learning-rate
-                       :tolerance tolerance
-                       :cost-function cost-fn
-                       :initial-parameters initial-params}]
-    
-    (try
-      ;; Use QClojure's variational algorithm template
-      ;; This would typically call the optimization algorithm from qclojure.application.algorithm.optimization
-      (let [;; Simple training loop for demonstration
-            ;; In practice, this would use the full variational algorithm infrastructure
-            result (optimize-parameters cost-fn initial-params training-opts)]
-        
-        {:status :success
-         :optimized-parameters (:parameters result)
-         :final-cost (:final-cost result)
-         :iterations (:iterations result)
-         :training-history (:history result)
-         :network network
-         :training-summary
-         {:total-parameters total-params
-          :training-examples (count training-data)
-          :optimizer optimizer
-          :loss-type loss-type
-          :final-accuracy (evaluate-qnn-accuracy network training-data 
-                                                  (:parameters result) backend)}})
-      
-      (catch Exception e
-        {:status :error
-         :error-message (.getMessage e)
-         :network network
-         :training-data-size (count training-data)}))))
+
+        ;; Create loss function for the task type
+        loss-fn (qnn-loss-function loss-type task-type)
+
+        ;; Create prediction extractor that works with measurement results
+        prediction-extractor (fn [measurement-result]
+                               (qnn-prediction-extractor measurement-result task-type
+                                                         measurement-strategy shots))
+
+        ;; Enhanced options with ML-specific settings
+        enhanced-options (merge {:optimization-method :cmaes  ; Use derivative-free by default
+                                 :max-iterations 100
+                                 :tolerance 1e-6
+                                 :shots shots
+                                 ;; Parameter ranges for QNN (typically 0 to 2π)
+                                 :parameter-range [0.0 6.28]}
+                                options)]
+
+    ;; Use enhanced-variational-algorithm template
+    (va/enhanced-variational-algorithm
+     backend
+     enhanced-options
+     {:algorithm :qnn
+      :objective-kind task-type  ; :classification or :regression
+      :parameter-count-fn qnn-parameter-count
+      :circuit-constructor-fn qnn-circuit-constructor-adapter
+      :dataset-fn qnn-dataset-constructor
+      :loss-fn loss-fn
+      :prediction-extractor-fn prediction-extractor
+      :result-processor-fn qnn-result-processor})))
 
 ;;;
 ;;; QNN Model Interface
@@ -1144,42 +1492,43 @@
   QNN model map with train and predict functions"
   [config]
   {:pre [(map? config) (contains? config :num-qubits)]}
-  
+
   (let [num-qubits (:num-qubits config)
         hidden-layers (:hidden-layers config 1)
         feature-map-type (:feature-map-type config :angle)
         activation-type (:activation-type config :quantum-tanh)
-        
+
         ;; Create the QNN network
         network (create-feedforward-qnn num-qubits hidden-layers
                                         :feature-map-type feature-map-type
                                         :activation-type activation-type)]
-    
+
     {:network network
      :config config
      :trained-parameters nil
      :training-history nil
-     
+
      ;; Training function
      :train (fn [training-data backend & {:keys [options] :or {options {}}}]
-              (let [result (train-qnn network training-data backend :options options)]
-                (if (= (:status result) :success)
-                  (assoc (dissoc result :status)
-                         :trained-parameters (:optimized-parameters result)
-                         :training-history (:training-history result))
+              (let [training-options (merge options {:network network :training-data training-data})
+                    result (train-qnn backend training-options)]
+                (if (:success result)
+                  (assoc result
+                         :trained-parameters (:optimal-parameters result)
+                         :training-history (:convergence-history result))
                   result)))
-     
+
      ;; Prediction function
      :predict (fn [features parameters backend]
                 (qnn-forward-pass network features parameters backend))
-     
+
      ;; Evaluation function
      :evaluate (fn [test-data parameters backend]
                  (evaluate-qnn-accuracy network test-data parameters backend))
-     
+
      ;; Analysis function
      :analyze (fn [] (analyze-qnn-network network))
-     
+
      ;; Visualization function
      :visualize (fn [] (visualize-qnn-network network))}))
 
