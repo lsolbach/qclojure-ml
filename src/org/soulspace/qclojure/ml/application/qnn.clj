@@ -1197,29 +1197,30 @@
   and adds QNN-specific analysis.
   
   Parameters:
-  - optimization-result: Result from variational optimization
+  - result: Result from variational optimization
+  - algorithm-config: Algorithm configuration map
   - options: QNN training options
   
   Returns:
   Enhanced result map with QNN metrics"
-  [optimization-result options]
-  (let [optimal-params (:optimal-parameters optimization-result)
+  [result algorithm-config options]
+  (let [optimal-params (:optimal-parameters result)
         task-type (:task-type options :classification)
         loss-type (:loss-type options (if (= task-type :classification) :accuracy :mse))
         optimal-loss (if (= task-type :classification)
-                       (- (:optimal-energy optimization-result))  ; Convert from negative accuracy
-                       (:optimal-energy optimization-result))
+                       (- (:optimal-energy result))  ; Convert from negative accuracy
+                       (:optimal-energy result))
         network (:network options)
         training-data (:training-data options)]
 
-    {:success (:success optimization-result)
+    {:success (:success result)
      :optimal-parameters optimal-params
      :final-loss optimal-loss
      :final-accuracy (when (= task-type :classification) optimal-loss)
-     :iterations (:iterations optimization-result)
-     :function-evaluations (:function-evaluations optimization-result)
-     :convergence-history (:convergence-history optimization-result)
-     :total-runtime-ms (:total-runtime-ms optimization-result 0)
+     :iterations (:iterations result)
+     :function-evaluations (:function-evaluations result)
+     :convergence-history (:convergence-history result)
+     :total-runtime-ms (:total-runtime-ms result 0)
      :network-info {:total-parameters (reduce + (map :parameter-count network))
                     :network-depth (count network)
                     :num-qubits (apply max (map :num-qubits network))}
@@ -1304,69 +1305,85 @@
       (fn accuracy-loss [predictions labels]
         ;; predictions is a vector of predicted labels (integers)
         ;; labels is a vector of true labels (integers)
-        (let [correct-count (count (filter true? (map = predictions labels)))
-              accuracy (/ correct-count (count labels))]
-          ;; Return negative accuracy for minimization
-          (- accuracy)))
+        (if (or (empty? predictions) (empty? labels))
+          1.0  ; Return maximum loss for empty batches
+          (let [correct-count (count (filter true? (map = predictions labels)))
+                accuracy (/ correct-count (count labels))]
+            ;; Return negative accuracy for minimization
+            (- accuracy))))
 
       :cross-entropy
       (fn cross-entropy-loss [predictions labels]
         ;; For cross-entropy, predictions should be probability distributions
         ;; This is a simplified version - full implementation would need probability vectors
-        (let [correct-count (count (filter true? (map = predictions labels)))
-              accuracy (/ correct-count (count labels))]
-          ;; Return negative log likelihood approximation
-          (- (Math/log (max 0.001 accuracy)))))
+        (if (or (empty? predictions) (empty? labels))
+          100.0  ; Return high loss for empty batches
+          (let [correct-count (count (filter true? (map = predictions labels)))
+                accuracy (/ correct-count (count labels))]
+            ;; Return negative log likelihood approximation
+            (- (Math/log (max 0.001 accuracy))))))
 
       :hinge
       (fn hinge-loss [predictions labels]
         ;; Hinge loss for classification
-        (let [correct-count (count (filter true? (map = predictions labels)))
-              accuracy (/ correct-count (count labels))]
-          ;; Return negative accuracy (simplified hinge loss)
-          (- accuracy)))
+        (if (or (empty? predictions) (empty? labels))
+          1.0  ; Return maximum loss for empty batches
+          (let [correct-count (count (filter true? (map = predictions labels)))
+                accuracy (/ correct-count (count labels))]
+            ;; Return negative accuracy (simplified hinge loss)
+            (- accuracy))))
 
       ;; Default to accuracy-based loss
       (fn default-loss [predictions labels]
-        (let [correct-count (count (filter true? (map = predictions labels)))
-              accuracy (/ correct-count (count labels))]
-          (- accuracy))))
+        (if (or (empty? predictions) (empty? labels))
+          1.0  ; Return maximum loss for empty batches
+          (let [correct-count (count (filter true? (map = predictions labels)))
+                accuracy (/ correct-count (count labels))]
+            (- accuracy)))))
 
     :regression
     (case loss-type
       :mse
       (fn mse-loss [predictions targets]
         ;; Mean squared error for regression
-        (let [squared-errors (map (fn [pred target]
-                                    (let [diff (- pred target)]
-                                      (* diff diff)))
-                                  predictions targets)
-              mse (/ (reduce + squared-errors) (count predictions))]
-          mse))
+        (if (or (empty? predictions) (empty? targets))
+          1000.0  ; Return high loss for empty batches
+          (let [squared-errors (map (fn [pred target]
+                                      (let [diff (- pred target)]
+                                        (* diff diff)))
+                                    predictions targets)
+                mse (/ (reduce + squared-errors) (count predictions))]
+            mse)))
 
       :mae
       (fn mae-loss [predictions targets]
         ;; Mean absolute error for regression
-        (let [absolute-errors (map (fn [pred target]
-                                     (Math/abs (- pred target)))
-                                   predictions targets)
-              mae (/ (reduce + absolute-errors) (count predictions))]
-          mae))
+        (if (or (empty? predictions) (empty? targets))
+          1000.0  ; Return high loss for empty batches
+          (let [absolute-errors (map (fn [pred target]
+                                       (Math/abs (- pred target)))
+                                     predictions targets)
+                mae (/ (reduce + absolute-errors) (count predictions))]
+            mae)))
 
       ;; Default to MSE
       (fn default-mse-loss [predictions targets]
-        (let [squared-errors (map (fn [pred target]
-                                    (let [diff (- pred target)]
-                                      (* diff diff)))
+        (if (or (empty? predictions) (empty? targets))
+          1000.0  ; Return high loss for empty batches
+          (let [squared-errors (map (fn [pred target]
+                                      (let [diff (- pred target)]
+                                        (* diff diff)))
                                   predictions targets)
               mse (/ (reduce + squared-errors) (count predictions))]
-          mse)))
+          mse))))
 
     ;; Default: assume classification with accuracy loss
     (fn default-accuracy-loss [predictions labels]
-      (let [correct-count (count (filter true? (map = predictions labels)))
-            accuracy (/ correct-count (count labels))]
-        (- accuracy)))))
+      (if (or (empty? predictions) (empty? labels))
+        1.0  ; Return maximum loss for empty batches
+        (let [correct-count (count (filter true? (map = predictions labels)))
+              accuracy (/ correct-count (count labels))]
+          (- accuracy))))))
 
 (defn train-qnn
   "Train a QNN using the enhanced variational algorithm template.
