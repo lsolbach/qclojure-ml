@@ -28,8 +28,8 @@
             [fastmath.core :as fm]
             [org.soulspace.qclojure.domain.circuit :as circuit]
             [org.soulspace.qclojure.domain.result :as result]
-            [org.soulspace.qclojure.domain.backend :as qb]
-            [org.soulspace.qclojure.domain.observable :as obs]
+            [org.soulspace.qclojure.domain.observables :as obs]
+            [org.soulspace.qclojure.application.backend :as backend]
             [org.soulspace.qclojure.application.algorithm.variational-algorithm :as va]
             [org.soulspace.qclojure.ml.application.encoding :as encoding]
             [org.soulspace.qclojure.ml.application.training :as training]))
@@ -547,7 +547,7 @@
   - :execution-metadata - Backend execution metadata"
   [network feature-data parameters backend & {:keys [options] :or {options {}}}]
   {:pre [(s/valid? ::qnn-network network)
-         (satisfies? qb/QuantumBackend backend)]}
+         (satisfies? backend/QuantumBackend backend)]}
 
   (let [circuit (apply-qnn-network network feature-data parameters)
         shots (:shots options 1024)
@@ -578,7 +578,7 @@
 
     ;; Execute circuit using backend protocol
     (try
-      (qb/execute-circuit backend circuit execution-options)
+      (backend/execute-circuit backend circuit execution-options)
       (catch Exception e
         (throw (ex-info "QNN forward pass execution failed"
                         {:network-depth (count network)

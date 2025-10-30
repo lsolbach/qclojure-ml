@@ -108,7 +108,7 @@
   
   Parameters:
   - measurement-data: Measurement result data from QClojure result system
-  - ancilla-qubit: Index of ancilla qubit (for multi-qubit measurements)
+  - ancilla-qubit: Index of ancilla qubit
   
   Returns:
   Map with overlap estimate and measurement statistics"
@@ -117,22 +117,28 @@
         shots (:shot-count measurement-data)
         frequencies (:frequencies measurement-data)
         
-        ;; Total number of qubits in the system (needed for index-to-bits conversion)
-        total-qubits (+ (* 2 2) 1)  ; 2 registers of 2 qubits each + 1 ancilla
+        ;; Extract bit at ancilla qubit position from basis state
+        ;; Qubit numbering: LSB is qubit 0, so bit position is qubit index from right
+        ;; Handle both integer and string basis states
+        ancilla-bit (fn [state]
+                      (if (string? state)
+                        ;; String format like "10010" - ancilla-qubit indexes from left
+                        (let [bit-char (nth state ancilla-qubit)]
+                          (if (= bit-char \0) 0 1))
+                        ;; Integer format - extract bit using bit operations
+                        (bit-and (bit-shift-right state ancilla-qubit) 1)))
         
         ;; Count measurements where ancilla is 0
-        ;; Outcomes are basis state indices, need to extract ancilla bit
-        count-0 (reduce (fn [acc outcome]
-                          (let [bits (state/index-to-bits outcome total-qubits)
-                                ancilla-bit (nth bits ancilla-qubit)]
-                            (if (= ancilla-bit 0)
-                              (inc acc)
-                              acc)))
+        ;; Use frequencies for efficiency (avoids iterating all shots)
+        count-0 (reduce (fn [acc [state count]]
+                          (if (zero? (ancilla-bit state))
+                            (+ acc count)
+                            acc))
                         0
-                        outcomes)
+                        frequencies)
 
         ;; Calculate probability and overlap
-        prob-0 (/ count-0 shots)
+        prob-0 (double (/ count-0 shots))
         overlap-squared (max 0.0 (- (* 2.0 prob-0) 1.0))  ; Ensure non-negative
         overlap (fm/sqrt overlap-squared)]
 

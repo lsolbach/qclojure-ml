@@ -192,40 +192,65 @@
 
 (deftest test-quantum-measurement-extraction
   (testing "Quantum measurement result extraction"
-    (let [mock-result {:outcomes {"0" 600 "1" 424} :shots 1024}]
+    ;; Use proper backend protocol result format
+    (let [mock-result {:results {:measurements {:outcomes {"0" 600 "1" 424}
+                                                :total-shots 1024}}}]
       
-      ;; Test expectation value extraction
+      ;; Test expectation value extraction from measurements
       (let [expectation (qnn/extract-expectation-value mock-result)]
         (is (number? expectation)
             "Expectation value should be a number")
         (is (and (>= expectation -1.0) (<= expectation 1.0))
-            "Expectation value should be between -1 and 1"))
+            "Expectation value should be between -1 and 1")
+        ;; For outcomes {"0" 600 "1" 424}, E[Z] = (600 - 424) / 1024 = 0.171875
+        (is (< (Math/abs (- expectation 0.171875)) 0.001)
+            "Should compute correct Z expectation from measurements"))
       
       ;; Test probability distribution extraction
       (let [prob-dist (qnn/extract-probability-distribution mock-result)]
         (is (vector? prob-dist)
             "Probability distribution should be a vector")
         (is (every? #(and (>= % 0.0) (<= % 1.0)) prob-dist)
-            "All probabilities should be between 0 and 1"))
+            "All probabilities should be between 0 and 1")
+        (is (= 2 (count prob-dist))
+            "Should have probability for each computational basis state")
+        ;; Check normalized probabilities
+        (is (< (Math/abs (- (reduce + prob-dist) 1.0)) 0.001)
+            "Probabilities should sum to 1.0"))
       
       ;; Test most probable state extraction
       (let [most-probable (qnn/extract-most-probable-state mock-result)]
         (is (string? most-probable)
             "Most probable state should be a string")
         (is (= "0" most-probable)
-            "Most probable state should be '0' for this example"))))
+            "Most probable state should be '0' for this example")))
+    
+    ;; Test with explicit expectation values
+    (let [mock-result-with-expectations {:results {:expectation {0 0.5 1 -0.3}}}]
+      (let [expectation (qnn/extract-expectation-value mock-result-with-expectations)]
+        (is (= 0.5 expectation)
+            "Should extract explicit expectation value at index 0"))
+      (let [expectation (qnn/extract-expectation-value mock-result-with-expectations 
+                                                       :options {:observable-index 1})]
+        (is (= -0.3 expectation)
+            "Should extract explicit expectation value at specified index"))))
   
   (testing "Error handling in measurement extraction"
+    ;; Test with missing results
     (let [error-result {:error "Quantum execution failed"}]
+      (is (thrown? clojure.lang.ExceptionInfo 
+                   (qnn/extract-expectation-value error-result))
+          "Should throw exception for missing results")
       
-      (is (= 0.0 (qnn/extract-expectation-value error-result))
-          "Should return default expectation value for errors")
-      
-      (is (= [0.5 0.5] (qnn/extract-probability-distribution error-result))
-          "Should return uniform distribution for errors")
-      
-      (is (= "0" (qnn/extract-most-probable-state error-result))
-          "Should return default state for errors"))))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (qnn/extract-probability-distribution error-result))
+          "Should throw exception for missing measurements"))
+    
+    ;; Test with empty outcomes
+    (let [empty-result {:results {:measurements {:outcomes {}}}}]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (qnn/extract-probability-distribution empty-result))
+          "Should throw exception for empty outcomes"))))
 
 ;;;
 ;;; Model Interface Tests
