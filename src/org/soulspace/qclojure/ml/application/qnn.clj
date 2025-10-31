@@ -1197,30 +1197,29 @@
   and adds QNN-specific analysis.
   
   Parameters:
-  - result: Result from variational optimization
-  - algorithm-config: Algorithm configuration map
+  - optimization-result: Result from variational optimization
   - options: QNN training options
   
   Returns:
   Enhanced result map with QNN metrics"
-  [result algorithm-config options]
-  (let [optimal-params (:optimal-parameters result)
+  [optimization-result options]
+  (let [optimal-params (:optimal-parameters optimization-result)
         task-type (:task-type options :classification)
         loss-type (:loss-type options (if (= task-type :classification) :accuracy :mse))
         optimal-loss (if (= task-type :classification)
-                       (- (:optimal-energy result))  ; Convert from negative accuracy
-                       (:optimal-energy result))
+                       (- (:optimal-energy optimization-result))  ; Convert from negative accuracy
+                       (:optimal-energy optimization-result))
         network (:network options)
         training-data (:training-data options)]
 
-    {:success (:success result)
+    {:success (:success optimization-result)
      :optimal-parameters optimal-params
      :final-loss optimal-loss
      :final-accuracy (when (= task-type :classification) optimal-loss)
-     :iterations (:iterations result)
-     :function-evaluations (:function-evaluations result)
-     :convergence-history (:convergence-history result)
-     :total-runtime-ms (:total-runtime-ms result 0)
+     :iterations (:iterations optimization-result)
+     :function-evaluations (:function-evaluations optimization-result)
+     :convergence-history (:convergence-history optimization-result)
+     :total-runtime-ms (:total-runtime-ms optimization-result 0)
      :network-info {:total-parameters (reduce + (map :parameter-count network))
                     :network-depth (count network)
                     :num-qubits (apply max (map :num-qubits network))}
