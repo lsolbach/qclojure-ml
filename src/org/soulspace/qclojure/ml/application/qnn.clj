@@ -1142,9 +1142,6 @@
 
       (/ correct-predictions (count test-data)))))
 
-;; FIXME use (enhanced) variational algoritm template!!!
-;; FIXME should return the algorithm as a function that can be called with different parameters
-;;       to avoid circuit constructions on every call.
 (defn qnn-dataset-constructor
   "Extract training data from QNN options for the variational algorithm template.
   
@@ -1473,8 +1470,8 @@
                                  :parameter-range [0.0 6.28]}
                                 options)]
 
-    ;; Use enhanced-variational-algorithm template
-    (va/enhanced-variational-algorithm
+    ;; Use variational-algorithm template
+    (va/variational-algorithm
      backend
      enhanced-options
      {:algorithm :qnn

@@ -625,8 +625,8 @@
                                  :parameter-range [-0.1 0.1]}
                                 options)]
 
-    ;; Use enhanced-variational-algorithm template
-    (va/enhanced-variational-algorithm
+    ;; Use variational-algorithm template
+    (va/variational-algorithm
      backend
      enhanced-options
      {:algorithm :vqc
