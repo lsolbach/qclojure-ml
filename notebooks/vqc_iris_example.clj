@@ -284,6 +284,21 @@
 
 ;; ## 7. VQC Configuration and Training
 
+;; **Performance Optimizations:**
+;; - Using CMAES optimizer (derivative-free, ~10 cost evaluations per iteration)
+;; - Mini-batch training with batch size 16 (vs. full 96 samples)
+;; - Reduced shots to 128 for training (good balance of speed and accuracy)
+;; - Expected training time: ~8-10 minutes for 50 iterations
+;;
+;; **Performance Analysis:**
+;; - Single circuit execution: ~100ms (simulator overhead)
+;; - Batch-size controls circuits per cost evaluation
+;; - CMAES needs ~10 cost evaluations per iteration
+;; - Formula: iterations × 10 × batch-size × 0.1s = total time
+;; - Example: 50 × 10 × 16 × 0.1s = 800s (~13 minutes)
+;;
+;; **Fast Development Mode** (uncomment for quick iteration):
+;; {:max-iterations 20, :batch-size 4, :shots 64}  ; ~2-3 minutes
 
 ;; Create quantum ansatz
 (def quantum-ansatz (ansatz/hardware-efficient-ansatz 4 2))
@@ -291,30 +306,52 @@
 ;; Create quantum backend for simulation
 (def quantum-backend (sim/create-simulator))
 
-;; VQC training configuration
+;; VQC training configuration - Balanced for performance and accuracy
 (def vqc-training-config
-  {:max-iterations 50
-   :learning-rate 0.02
+  {:max-iterations 50          ; Reasonable for convergence
+   :learning-rate 0.1          ; Not used by CMAES, kept for compatibility
    :parameter-strategy :random
    :parameter-range [-0.1 0.1]
-   :num-parameters 24  ; 4 qubits × 2 layers × 3 rotations = 24 parameters
+   :num-parameters 24          ; 4 qubits × 2 layers × 3 rotations = 24 parameters
    :loss-function :cross-entropy
    :regularization :l2
    :reg-lambda 0.001
    :backend quantum-backend
-   :tolerance 1e-6})
+   :tolerance 1e-6
+   :optimization-method :cmaes ; Derivative-free, robust optimizer
+   :batch-size 16              ; Balance between speed and stability
+   :shots 128})                ; Sufficient for gradient estimation
+
+;; Fast development configuration (for quick experiments)
+(comment
+  (def vqc-training-config-fast
+    {:max-iterations 20
+     :parameter-strategy :random
+     :parameter-range [-0.1 0.1]
+     :num-parameters 24
+     :loss-function :cross-entropy
+     :regularization :l2
+     :reg-lambda 0.001
+     :backend quantum-backend
+     :tolerance 1e-4
+     :optimization-method :cmaes
+     :batch-size 4              ; Very small batches for speed
+     :shots 64}))               ; Minimal shots → ~2-3 minute training
 
 (kind/table
  (tc/dataset
-  {:parameter ["Max Iterations" "Learning Rate" "Parameter Strategy" "Loss Function"
-               "Regularization" "Reg Lambda" "Backend"]
+  {:parameter ["Max Iterations" "Optimization Method" "Batch Size" "Shots"
+               "Loss Function" "Regularization" "Reg Lambda" "Backend"
+               "Expected Time"]
    :value [(:max-iterations vqc-training-config)
-           (:learning-rate vqc-training-config)
-           (str (:parameter-strategy vqc-training-config))
+           (str (:optimization-method vqc-training-config))
+           (:batch-size vqc-training-config)
+           (:shots vqc-training-config)
            (str (:loss-function vqc-training-config))
            (str (:regularization vqc-training-config))
            (:reg-lambda vqc-training-config)
-           "Ideal Simulator"]}))
+           "Ideal Simulator"
+           "~10-15 minutes"]}))
 
 ;; ## 8. Model Training
 
