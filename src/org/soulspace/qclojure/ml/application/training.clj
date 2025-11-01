@@ -115,6 +115,9 @@
     - :regularization - :none (default), :l1, :l2, :elastic-net
     - :reg-lambda - Regularization strength (default: 0.01)
     - :reg-alpha - Elastic net mix ratio (default: 0.5)
+    - :batch-size - Number of samples per batch (default: nil = all samples)
+    - :batch-indices - Specific indices to use (default: nil = all samples)
+    - :shots - Number of shots per circuit execution (default: 1024)
   
   Returns:
   Cost value (real number)"
@@ -134,6 +137,24 @@
           regularization (:regularization options :none)
           reg-lambda (:reg-lambda options 0.01)
           reg-alpha (:reg-alpha options 0.5)
+          shots (:shots options 1024)
+          
+          ;; Determine which samples to process
+          sample-indices (cond
+                           ;; Use provided batch indices
+                           (:batch-indices options)
+                           (:batch-indices options)
+                           
+                           ;; Use batch-size to create random batch
+                           (:batch-size options)
+                           (let [batch-size (min (:batch-size options) num-samples)]
+                             (vec (take batch-size (shuffle (range num-samples)))))
+                           
+                           ;; Default: use all samples
+                           :else
+                           (vec (range num-samples)))
+          
+          batch-size (count sample-indices)
           
           ;; Calculate data loss
           total-loss (reduce
@@ -158,8 +179,8 @@
                               ;; Combine encoding and ansatz using circuit composition
                               final-circuit (ccomp/compose-circuits encoded-circuit ansatz-circuit)
 
-                              ;; Execute circuit using backend
-                              probs (let [execution-result (backend/execute-circuit backend final-circuit {:shots 1024})
+                              ;; Execute circuit using backend with configurable shots
+                              probs (let [execution-result (backend/execute-circuit backend final-circuit {:shots shots})
                                           measurement-counts (:measurement-counts execution-result)
                                           num-qubits (:num-qubits final-circuit)
                                           num-states (int (m/pow 2 num-qubits))]
@@ -167,7 +188,7 @@
                                       (mapv (fn [i]
                                               (let [bit-string (state/basis-string i num-qubits)
                                                     count (get measurement-counts bit-string 0)]
-                                                (/ count 1024.0)))
+                                                (/ count (double shots))))
                                             (range num-states)))
 
                               ;; Calculate loss based on specified loss function
@@ -194,10 +215,10 @@
 
                           (+ acc-loss sample-loss)))
                       0.0
-                      (range num-samples))
+                      sample-indices)
           
           ;; Calculate average data loss
-          avg-data-loss (/ total-loss num-samples)
+          avg-data-loss (/ total-loss batch-size)
           
           ;; Add regularization penalty
           reg-penalty (case regularization
@@ -322,15 +343,30 @@
         1000.0))))
 
 (defn train-qml-model
-  "Train a quantum machine learning model using gradient-based optimization.
+  "Train a quantum machine learning model using various optimization methods.
   
   Parameters:
   - ansatz-fn: Parameterized quantum circuit function  
-  - training-data: Map with :features and :labels
-  - config: Training configuration
+  - training-data: Map with :features and :labels (or :targets for regression)
+  - config: Training configuration map with:
+    - :backend - Quantum backend
+    - :max-iterations - Maximum optimization iterations (default: 50)
+    - :tolerance - Convergence tolerance (default: 1e-6)
+    - :num-parameters - Number of variational parameters
+    - :parameter-strategy - :random, :zero, :custom, :legacy (default: :random)
+    - :initial-parameters - Custom initial parameters (if :custom strategy)
+    - :parameter-range - Range for random init (default: [-0.1 0.1])
+    - :optimization-method - :gradient-descent, :adam, :cmaes, :nelder-mead, :powell, :bobyqa (default: :cmaes)
+    - :learning-rate - Learning rate for gradient-based methods (default: 0.01)
+    - :batch-size - Mini-batch size for training (default: nil = full batch)
+    - :shots - Number of shots per circuit execution (default: 1024)
+    - :loss-function - :cross-entropy, :hinge, :squared (default: :cross-entropy)
+    - :regularization - :none, :l1, :l2, :elastic-net (default: :none)
+    - :reg-lambda - Regularization strength (default: 0.01)
+    - :reg-alpha - Elastic net mix ratio (default: 0.5)
   
   Returns:
-  Trained model parameters and metrics"
+  Map with trained model parameters and metrics"
   [ansatz-fn training-data config]
   (let [features (:features training-data)
         labels (:labels training-data)
@@ -338,6 +374,9 @@
         max-iterations (:max-iterations config 50)
         learning-rate (:learning-rate config 0.01)
         tolerance (:tolerance config 1e-6)
+        optimization-method (:optimization-method config :cmaes)
+        batch-size (:batch-size config nil)
+        shots (:shots config 1024)
 
         ;; Initialize parameters using variational algorithm patterns
         num-params (:num-parameters config
@@ -348,30 +387,71 @@
                                                                    :range (:parameter-range config [-0.1 0.1]))
                          :zero (va/zero-parameter-initialization num-params)
                          :custom (:initial-parameters config)
-                         ;; Fallback to original method for compatibility
                          :legacy (vec (repeatedly num-params #(* 0.1 (- (rand) 0.5))))
                          ;; Default to random with small range for QML stability
                          (va/random-parameter-initialization num-params :range [-0.1 0.1]))
 
-        ;; Create cost function using enhanced factory with options
+        ;; Create cost function options including batch-size and shots
         loss-options {:loss-function (:loss-function config :cross-entropy)
                       :regularization (:regularization config :none)
                       :reg-lambda (:reg-lambda config 0.01)
-                      :reg-alpha (:reg-alpha config 0.5)}
+                      :reg-alpha (:reg-alpha config 0.5)
+                      :batch-size batch-size
+                      :shots shots}
+        
+        ;; Create base cost function
         cost-fn (if (:targets training-data) ; Check if regression
                   (create-regression-cost-fn ansatz-fn features (:targets training-data) backend :options loss-options)
                   (create-classification-cost-fn ansatz-fn features labels backend :options loss-options))
 
-        ;; Optimization options for gradient descent
-        optimization-options {:learning-rate learning-rate
-                              :max-iterations max-iterations
-                              :tolerance tolerance
-                              :adaptive-learning-rate true
-                              :momentum 0.9}
-
-        ;; Use optimization namespace for training
+        ;; Optimization execution
         start-time (System/currentTimeMillis)
-        result (opt/gradient-descent-optimization cost-fn initial-params optimization-options)
+        result (cond
+                 ;; Gradient-based methods
+                 (= optimization-method :gradient-descent)
+                 (opt/gradient-descent-optimization cost-fn initial-params
+                                                    {:learning-rate learning-rate
+                                                     :max-iterations max-iterations
+                                                     :tolerance tolerance
+                                                     :adaptive-learning-rate true
+                                                     :momentum 0.9})
+                 
+                 (= optimization-method :adam)
+                 (opt/adam-optimization cost-fn initial-params
+                                       {:learning-rate learning-rate
+                                        :max-iterations max-iterations
+                                        :tolerance tolerance})
+                 
+                 ;; Derivative-free methods
+                 (= optimization-method :cmaes)
+                 (opt/fastmath-derivative-free-optimization :cmaes cost-fn initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance
+                                                             :sigma 0.3})
+                 
+                 (= optimization-method :nelder-mead)
+                 (opt/fastmath-derivative-free-optimization :nelder-mead cost-fn initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+                 
+                 (= optimization-method :powell)
+                 (opt/fastmath-derivative-free-optimization :powell cost-fn initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+                 
+                 (= optimization-method :bobyqa)
+                 (opt/fastmath-derivative-free-optimization :bobyqa cost-fn initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance
+                                                             :bounds [(:parameter-range config [-3.14 3.14])]})
+                 
+                 ;; Default to CMAES (robust for quantum ML)
+                 :else
+                 (opt/fastmath-derivative-free-optimization :cmaes cost-fn initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance
+                                                             :sigma 0.3}))
+        
         end-time (System/currentTimeMillis)]
 
     ;; Transform optimization result to match original API
@@ -387,7 +467,10 @@
                              (range))
      :execution-time-ms (- end-time start-time)
      :convergence-reason (:reason result)
-     :function-evaluations (:function-evaluations result)}))
+     :function-evaluations (:function-evaluations result)
+     :optimization-method optimization-method
+     :batch-size batch-size
+     :shots shots}))
 
 ;; Rich comment block for testing
 (comment
