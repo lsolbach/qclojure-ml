@@ -3,8 +3,9 @@
   :license {:name "Eclipse Public License 1.0"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.12.3"]
-                 [org.soulspace/qclojure "0.23.0"]
-                 [org.scicloj/noj "2-beta18"]]
+                 [org.scicloj/noj "2-beta18"]
+                 [org.slf4j/slf4j-nop "2.0.17"] ; supress logging warnings
+                 [org.soulspace/qclojure "0.23.0"]]
 
   :profiles {:dev [:user {}]
              :sim-heavy {:jvm-opts ["-Xms8g" "-Xmx32g"
@@ -13,7 +14,7 @@
              :container {:jvm-opts ["-XX:InitialRAMPercentage=2.0"
                                     "-XX:MaxRAMPercentage=60.0"]}
              :clay {:dependencies [[org.scicloj/clay "2.0.0"]]
-                    :source-paths ["src" "notebooks"]}} 
-  
+                    :source-paths ["src" "notebooks"]}}
+
   :scm {:name "git" :url "https://github.com/lsolbach/qclojure-ml"}
   :deploy-repositories [["clojars" {:sign-releases false :url "https://clojars.org/repo"}]])
