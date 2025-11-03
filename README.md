@@ -16,8 +16,20 @@ dtype.next for the classical parts of QML algorithms.
 * Feature encoding
 * Training
 * Variational Quantum Classifier algorithm
+* Quantum Kernels
+* Quantum Neural Networks
+
+## Prerequsites
+As Clojure runs on the Java Virtual Machine, you need a JVM installed.
+While QClojure and QClojure ML will run with Java 11, a recent JVM >= 21 is preferred.
 
 ## Usage
+QClojure ML is a Clojure library to be used in programs or interactive within the REPL.
+
+To use QClojure ML, add a dependency to your project definition.
+
+See [![Clojars Project](https://img.shields.io/clojars/v/org.soulspace/qclojure-ml.svg)](https://clojars.org/org.soulspace/qclojure-ml)
+
 
 ## Build
 QClojure ML is currently build with [Leiningen](https://leiningen.org/).
