@@ -456,7 +456,7 @@
 
     ;; Transform optimization result to match original API
     {:success (:success result)
-     :optimal-parameters (:optimal-parameters result)
+     :optimal-parameters (vec (:optimal-parameters result))  ; Ensure vector type
      :optimal-cost (:optimal-energy result)
      :iterations (:iterations result)
      :training-history (mapv (fn [energy idx]
