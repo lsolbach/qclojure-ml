@@ -19,17 +19,51 @@
   2. Compute pairwise overlaps |⟨ψ(x_i)|ψ(x_j)⟩|² using SWAP test circuits
   3. Build kernel matrix for use with classical ML algorithms
   4. Support symmetric and asymmetric kernel computations"
- (:require [clojure.spec.alpha :as s]
-           [fastmath.core :as fm]
-           [org.soulspace.qclojure.application.backend :as backend]
-           [org.soulspace.qclojure.domain.circuit :as circuit]
-           [org.soulspace.qclojure.domain.state :as state]
-           [org.soulspace.qclojure.ml.application.encoding :as encoding]))
+  (:require [clojure.spec.alpha :as s]
+            [fastmath.core :as fm]
+            [org.soulspace.qclojure.application.backend :as backend]
+            [org.soulspace.qclojure.application.algorithm.optimization :as opt]
+            [org.soulspace.qclojure.application.algorithm.variational-algorithm :as va]
+            [org.soulspace.qclojure.domain.circuit :as circuit]
+            [org.soulspace.qclojure.domain.state :as state]
+            [org.soulspace.qclojure.ml.application.encoding :as encoding]
+            [org.soulspace.qclojure.ml.application.training :as training]))
 
 ;;;
 ;;; Specs for quantum kernel operations
 ;;;
 (s/def ::data-matrix (s/coll-of ::encoding/feature-vector :kind vector?))
+(s/def ::kernel-matrix (s/coll-of (s/coll-of number? :kind vector?) :kind vector?))
+(s/def ::encoding-type #{:angle :amplitude :basis :iqp :trainable})
+(s/def ::shots pos-int?)
+(s/def ::overlap-result (s/keys :req-un [::overlap-value ::measurement-data]))
+(s/def ::overlap-value (s/and number? #(<= 0.0 % 1.0)))
+
+(s/def ::kernel-config
+  (s/keys :req-un [::encoding-type]
+          :opt-un [::shots ::encoding/num-qubits ::encoding-options ::trainable-parameters]))
+
+(s/def ::encoding-options map?)
+(s/def ::trainable-parameters (s/coll-of number? :kind vector?))
+
+;; Specs for trainable kernel configuration
+(s/def ::num-trainable-layers pos-int?)
+(s/def ::parameter-strategy #{:random :zero :custom :legacy})
+(s/def ::parameter-range (s/tuple number? number?))
+(s/def ::regularization #{:none :l1 :l2 :elastic-net})
+(s/def ::reg-lambda (s/and number? pos?))
+(s/def ::reg-alpha (s/and number? #(<= 0.0 % 1.0)))
+
+(s/def ::trainable-kernel-config
+  (s/keys :req-un [::encoding-type ::num-trainable-layers]
+          :opt-un [::shots ::encoding/num-qubits ::encoding-options
+                   ::trainable-parameters ::optimization-method
+                   ::max-iterations ::learning-rate ::parameter-strategy
+                   ::parameter-range ::regularization ::reg-lambda ::reg-alpha]))
+
+(s/def ::kernel-alignment-objective #{:supervised :target-alignment})
+(s/def ::labels (s/coll-of nat-int? :kind vector?))
+(s/def ::target-kernel ::kernel-matrix)
 (s/def ::kernel-matrix (s/coll-of (s/coll-of number? :kind vector?) :kind vector?))
 (s/def ::encoding-type #{:angle :amplitude :basis :iqp})
 (s/def ::shots pos-int?)
@@ -153,6 +187,18 @@
 ;;;
 ;;; Data encoding integration for kernel computation
 ;;;
+(defn calculate-trainable-parameter-count
+  "Calculate the number of trainable parameters needed for a parametrized feature map.
+  
+  Parameters:
+  - num-qubits: Number of qubits
+  - num-layers: Number of trainable layers
+  
+  Returns:
+  Total number of trainable parameters"
+  [num-qubits num-layers]
+  (* num-qubits 2 num-layers))
+
 (defn encode-data-for-kernel
   "Encode classical data point using specified encoding strategy.
   
@@ -207,9 +253,351 @@
 
     (throw (ex-info "Unsupported encoding type" {:encoding-type encoding-type}))))
 
+(defn parametrized-feature-map
+  "Create a parametrized feature map with trainable parameters.
+  
+  This feature map combines data encoding with trainable rotation gates,
+  allowing the kernel to be optimized for specific datasets. This is critical
+  for achieving quantum advantage over classical kernels.
+  
+  Architecture:
+  1. Data encoding layer (angle encoding of features)
+  2. Trainable rotation layers (parametrized Ry and Rz gates)
+  3. Entangling layers (to create feature interactions)
+  
+  Parameters:
+  - data-point: Classical feature vector
+  - trainable-params: Vector of trainable parameters
+  - num-qubits: Number of qubits for encoding
+  - num-layers: Number of trainable layers
+  - options: Additional options
+  
+  Returns:
+  Function that applies parametrized encoding to a circuit"
+  [data-point trainable-params num-qubits num-layers options]
+  {:pre [(vector? data-point)
+         (vector? trainable-params)
+         (pos-int? num-qubits)
+         (pos-int? num-layers)]}
+
+  (let [base-gate (:gate-type options :ry)
+        entangling (:entangling options true)
+        params-per-layer (* num-qubits 2)
+        expected-params (* num-layers params-per-layer)
+
+        _ (when (< (count trainable-params) expected-params)
+            (throw (ex-info "Insufficient trainable parameters"
+                            {:expected expected-params
+                             :provided (count trainable-params)
+                             :num-qubits num-qubits
+                             :num-layers num-layers})))]
+
+    (fn [circuit]
+      (let [data-encoder (encode-data-for-kernel data-point :angle num-qubits {:gate-type base-gate})
+            circuit-with-data (data-encoder circuit)
+
+            circuit-with-trainable
+            (reduce
+             (fn [c layer-idx]
+               (let [layer-start (* layer-idx params-per-layer)
+                     layer-params (subvec trainable-params layer-start (+ layer-start params-per-layer))
+
+                     c-rotations
+                     (reduce
+                      (fn [circ qubit-idx]
+                        (let [param-idx (* qubit-idx 2)
+                              ry-angle (nth layer-params param-idx)
+                              rz-angle (nth layer-params (inc param-idx))]
+                          (-> circ
+                              (circuit/ry-gate qubit-idx ry-angle)
+                              (circuit/rz-gate qubit-idx rz-angle))))
+                      c
+                      (range num-qubits))
+
+                     c-entangled
+                     (if entangling
+                       (reduce
+                        (fn [circ qubit-idx]
+                          (let [target (mod (inc qubit-idx) num-qubits)]
+                            (circuit/cnot-gate circ qubit-idx target)))
+                        c-rotations
+                        (range num-qubits))
+                       c-rotations)]
+
+                 c-entangled))
+             circuit-with-data
+             (range num-layers))]
+
+        circuit-with-trainable))))
+
+(defn trainable-quantum-kernel-overlap
+  "Compute quantum kernel overlap using trainable parametrized feature maps.
+  
+  This function extends the standard kernel computation with trainable parameters,
+  allowing the kernel to be optimized for specific datasets. This is essential
+  for achieving quantum advantage over classical kernels.
+  
+  Parameters:
+  - backend: Quantum backend for circuit execution
+  - data-point1: First classical data vector
+  - data-point2: Second classical data vector
+  - trainable-params: Vector of trainable parameters
+  - config: Kernel configuration with trainable settings
+  
+  Returns:
+  Map with overlap value and measurement details"
+  [backend data-point1 data-point2 trainable-params config]
+  {:pre [(map? config)
+         (vector? trainable-params)]}
+
+  (let [num-qubits (:num-qubits config (max 2 (int (Math/ceil (/ (Math/log (max (count data-point1) (count data-point2))) (Math/log 2))))))
+        num-layers (:num-trainable-layers config 2)
+        shots (:shots config 1024)
+        encoding-options (:encoding-options config {})
+
+        total-qubits (+ (* 2 num-qubits) 1)
+        register1-qubits (range 0 num-qubits)
+        register2-qubits (range num-qubits (* 2 num-qubits))
+        ancilla-qubit (* 2 num-qubits)
+
+        base-circuit (circuit/create-circuit total-qubits)
+
+        encoder1 (parametrized-feature-map data-point1 trainable-params num-qubits num-layers encoding-options)
+        circuit-with-state1 (encoder1 base-circuit)
+
+        encoder2 (parametrized-feature-map data-point2 trainable-params num-qubits num-layers encoding-options)
+        shifted-circuit (reduce (fn [c op]
+                                  (let [shifted-op (update op :operation-params
+                                                           (fn [params]
+                                                             (cond-> params
+                                                               (:target params)
+                                                               (update :target #(+ % num-qubits))
+                                                               (:control params)
+                                                               (update :control #(+ % num-qubits)))))]
+                                    (update c :operations conj shifted-op)))
+                                circuit-with-state1
+                                (:operations (encoder2 (circuit/create-circuit num-qubits))))
+
+        swap-test-circuit (swap-test-circuit shifted-circuit register1-qubits register2-qubits ancilla-qubit)
+
+        options {:result-specs {:measurements {:shots shots
+                                               :qubits [ancilla-qubit]}}}
+
+        execution-result (backend/execute-circuit backend swap-test-circuit options)
+        measurement-data (get-in execution-result [:results :measurement-results])]
+
+    (if (or (nil? measurement-data) (empty? (:measurement-outcomes measurement-data)))
+      {:overlap-value 0.0
+       :error "No measurement results obtained"
+       :measurement-data {}}
+      (estimate-overlap-from-swap-measurements measurement-data ancilla-qubit))))
+
+(defn compute-trainable-kernel-matrix
+  "Compute quantum kernel matrix with trainable parameters.
+  
+  Parameters:
+  - backend: Quantum backend
+  - data-matrix: Matrix of data vectors
+  - trainable-params: Trainable parameters for feature map
+  - config: Trainable kernel configuration
+  
+  Returns:
+  Kernel matrix computed with trainable feature maps"
+  [backend data-matrix trainable-params config]
+  {:pre [(vector? data-matrix)
+         (vector? trainable-params)
+         (map? config)]}
+  
+  (let [n (count data-matrix)]
+    (mapv (fn [i]
+            (mapv (fn [j]
+                    (if (= i j)
+                      1.0
+                      (let [overlap-result (trainable-quantum-kernel-overlap
+                                            backend
+                                            (nth data-matrix i)
+                                            (nth data-matrix j)
+                                            trainable-params
+                                            config)]
+                        (if (:error overlap-result)
+                          0.0
+                          (:overlap-value overlap-result)))))
+                  (range n)))
+          (range n))))
+
 ;;;
 ;;; Core quantum kernel computation functions
 ;;;
+(defn train-quantum-kernel
+  "Train a quantum kernel using Quantum Kernel Alignment (QKA).
+  
+  This function optimizes the trainable parameters of a quantum kernel to maximize
+  alignment with an ideal kernel (supervised) or to optimize for a specific task.
+  This is the key to achieving quantum advantage over classical kernels.
+  
+  Kernel Alignment Objective:
+  - Supervised: Maximize alignment with ideal kernel from labels
+  - Target Alignment: Maximize alignment with provided target kernel
+  
+  Parameters:
+  - backend: Quantum backend
+  - data-matrix: Training data matrix
+  - labels: Training labels (for supervised alignment)
+  - config: Training configuration
+  
+  Required config:
+  - :num-qubits - Number of qubits
+  - :num-trainable-layers - Number of trainable layers
+  - :alignment-objective - :supervised or :target-alignment
+  
+  Optional config:
+  - :target-kernel - Target kernel matrix (for target alignment)
+  - :optimization-method - Optimizer (:adam, :cmaes, :nelder-mead, :powell, :bobyqa, :gradient-descent)
+  - :max-iterations - Maximum training iterations (default: 100)
+  - :learning-rate - Learning rate for gradient-based optimizers (default: 0.01)
+  - :shots - Shots per circuit (default: 1024)
+  - :parameter-strategy - Parameter init strategy (:random, :zero, :custom, :legacy, default: :random)
+  - :parameter-range - Range for random init (default: [-π π])
+  - :initial-parameters - Custom initial parameters (if :custom strategy)
+  - :regularization - Regularization type (:none, :l1, :l2, :elastic-net, default: :none)
+  - :reg-lambda - Regularization strength (default: 0.01)
+  - :reg-alpha - Elastic net mix ratio (default: 0.5)
+  
+  Returns:
+  Map with trained parameters and training history"
+  [backend data-matrix labels config]
+  {:pre [(vector? data-matrix)
+         (or (nil? labels) (vector? labels))
+         (map? config)]}
+  
+  (let [num-qubits (:num-qubits config)
+        num-layers (:num-trainable-layers config 2)
+        objective-type (:alignment-objective config :supervised)
+        optimization-method (:optimization-method config :cmaes)
+        max-iterations (:max-iterations config 100)
+        learning-rate (:learning-rate config 0.01)
+        shots (:shots config 1024)
+        tolerance (:tolerance config 1e-6)
+        
+        ;; Regularization configuration
+        regularization (:regularization config :none)
+        reg-lambda (:reg-lambda config 0.01)
+        reg-alpha (:reg-alpha config 0.5)
+        
+        ;; Use training utilities for parameter initialization
+        num-params (calculate-trainable-parameter-count num-qubits num-layers)
+        parameter-strategy (:parameter-strategy config :random)
+        initial-params (case parameter-strategy
+                         :random (va/random-parameter-initialization 
+                                  num-params 
+                                  :range (:parameter-range config [(- fm/PI) fm/PI]))
+                         :zero (va/zero-parameter-initialization num-params)
+                         :custom (:initial-parameters config)
+                         :legacy (vec (repeatedly num-params #(* 0.1 (rand))))
+                         ;; Default to random with [-π, π] range
+                         (va/random-parameter-initialization num-params :range [(- fm/PI) fm/PI]))
+        
+        ideal-kernel (when (and labels (= objective-type :supervised))
+                       (let [n (count data-matrix)]
+                         (mapv (fn [i]
+                                 (mapv (fn [j]
+                                         (if (= (nth labels i) (nth labels j))
+                                           1.0
+                                           0.0))
+                                       (range n)))
+                               (range n))))
+        
+        target-kernel (or (:target-kernel config) ideal-kernel)
+        
+        alignment-objective
+        (fn [params]
+          (try
+            (let [kernel-config (assoc config
+                                       :encoding-type :trainable
+                                       :num-qubits num-qubits
+                                       :num-trainable-layers num-layers
+                                       :shots shots)
+                  quantum-kernel (compute-trainable-kernel-matrix backend data-matrix params kernel-config)
+                  kernel-frobenius (fn [k]
+                                     (let [n (count k)]
+                                       (fm/sqrt (reduce +
+                                                        (for [i (range n)
+                                                              j (range n)]
+                                                          (fm/sq (get-in k [i j])))))))
+                  numerator (let [n (count quantum-kernel)]
+                              (reduce +
+                                      (for [i (range n)
+                                            j (range n)]
+                                        (* (get-in quantum-kernel [i j])
+                                           (get-in target-kernel [i j])))))
+                  denominator (* (kernel-frobenius quantum-kernel)
+                                 (kernel-frobenius target-kernel))
+                  alignment (if (> denominator 0.0)
+                              (/ numerator denominator)
+                              0.0)
+                  
+                  ;; Add regularization penalty using training utilities
+                  reg-penalty (case regularization
+                                :l1 (training/l1-regularization params reg-lambda)
+                                :l2 (training/l2-regularization params reg-lambda)
+                                :elastic-net (training/elastic-net-regularization params reg-lambda reg-alpha)
+                                :none 0.0
+                                0.0)]
+              ;; Return negative alignment (to minimize) plus regularization penalty
+              (+ (- alignment) reg-penalty))
+            (catch Exception e
+              (println "Warning: alignment computation failed:" (.getMessage e))
+              1.0)))]
+    
+    ;; Use newer unified optimization API from training namespace pattern
+    (let [result (cond
+                   (= optimization-method :gradient-descent)
+                   (opt/gradient-descent-optimization alignment-objective initial-params
+                                                      {:max-iterations max-iterations
+                                                       :learning-rate learning-rate
+                                                       :tolerance tolerance})
+                   
+                   (= optimization-method :adam)
+                   (opt/adam-optimization alignment-objective initial-params
+                                          {:max-iterations max-iterations
+                                           :learning-rate learning-rate
+                                           :tolerance tolerance})
+                   
+                   (= optimization-method :cmaes)
+                   (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
+                                                              {:max-iterations max-iterations
+                                                               :tolerance tolerance})
+                   
+                   (= optimization-method :nelder-mead)
+                   (opt/fastmath-derivative-free-optimization :nelder-mead alignment-objective initial-params
+                                                              {:max-iterations max-iterations
+                                                               :tolerance tolerance})
+                   
+                   (= optimization-method :powell)
+                   (opt/fastmath-derivative-free-optimization :powell alignment-objective initial-params
+                                                              {:max-iterations max-iterations
+                                                               :tolerance tolerance})
+                   
+                   (= optimization-method :bobyqa)
+                   (opt/fastmath-derivative-free-optimization :bobyqa alignment-objective initial-params
+                                                              {:max-iterations max-iterations
+                                                               :tolerance tolerance})
+                   
+                   ;; Default to CMAES
+                   :else
+                   (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
+                                                              {:max-iterations max-iterations
+                                                               :tolerance tolerance}))]
+      
+      {:success true
+       :optimal-parameters (:optimal-parameters result)
+       :optimal-alignment (- (:optimal-value result))
+       :initial-alignment (- (alignment-objective initial-params))
+       :iterations (:iterations result)
+       :optimization-method optimization-method
+       :config config
+       :training-history result})))
+
 (defn quantum-kernel-overlap
   "Compute quantum kernel overlap between two data points using SWAP test.
   
@@ -268,7 +656,7 @@
 
         ;; Define options with result specifications for measurement extraction
         options {:result-specs {:measurements {:shots shots
-                                                    :qubits [ancilla-qubit]}}}
+                                               :qubits [ancilla-qubit]}}}
 
         ;; Execute circuit with result specs (wrapped in options map)
         execution-result (backend/execute-circuit backend swap-test-circuit options)
@@ -541,6 +929,52 @@
   ;; - Diagonal elements should be 1.0
   ;; - All values should be between 0.0 and 1.0
   ;; - Similar data points should have higher kernel values
+
+  ;;;
+  ;;; Trainable Quantum Kernels
+  ;;;
+
+  ;; 1. Prepare training data with labels
+  (def training-data [[0.1 0.2] [0.15 0.25] [0.8 0.9] [0.85 0.95]])
+  (def training-labels [0 0 1 1])  ; Binary classification
+
+  ;; 2. Configure trainable kernel
+  (def trainable-config
+    {:num-qubits 2
+     :num-trainable-layers 2
+     :encoding-type :trainable
+     :alignment-objective :supervised
+     :optimization-method :cmaes
+     :max-iterations 50
+     :shots 1024})
+
+  ;; 3. Train the quantum kernel using Quantum Kernel Alignment
+  (def training-result
+    (train-quantum-kernel backend training-data training-labels trainable-config))
+
+  ;; 4. Extract trained parameters
+  (def trained-params (:optimal-parameters training-result))
+  (:optimal-alignment training-result)  ; Final kernel alignment
+  (:initial-alignment training-result)  ; Initial alignment (baseline)
+  (:iterations training-result)         ; Number of optimization iterations
+
+  ;; 5. Use trained kernel for inference
+  (def inference-config
+    (assoc trainable-config :encoding-type :trainable))
+
+  (def trained-kernel-matrix
+    (compute-trainable-kernel-matrix backend training-data trained-params inference-config))
+
+  ;; 6. Test on new data
+  (def test-data [[0.12 0.22] [0.82 0.92]])
+  (def test-kernel-matrix
+    (compute-trainable-kernel-matrix backend test-data trained-params inference-config))
+
+  ;; Expected outcomes:
+  ;; - Alignment should improve during training (optimal > initial)
+  ;; - Data points with same labels should have higher kernel values
+  ;; - Trained kernel should separate classes better than unparameterized kernel
+  ;; - This demonstrates quantum advantage through trainable feature maps
 
   ;
   )
