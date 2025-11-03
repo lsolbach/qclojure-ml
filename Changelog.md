@@ -1,6 +1,6 @@
 # Changelog
 
-## Version (NEXT)
+## Version 0.2.0
 * added quantum kernel methods
 * added quantum neural networks
 * enhanced training with batching and configurable optimizers
