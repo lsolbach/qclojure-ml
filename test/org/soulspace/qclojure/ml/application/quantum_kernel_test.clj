@@ -48,41 +48,6 @@
     (is (not (s/valid? ::qk/kernel-config 
                        {:shots -100})))))
 
-(deftest test-swap-test-measurement-analysis
-  (testing "SWAP test overlap estimation"
-    ;; Test case where ancilla is measured in |0⟩ 70% of the time
-    ;; Using 5-qubit format: ancilla + 2 registers of 2 qubits each
-    (let [measurements {"00000" 200 "00001" 150 "00010" 150 "00011" 200 
-                        "10000" 100 "10001" 100 "10010" 100}
-          measurement-data (frequency-map-to-measurement-data measurements)
-          ancilla-qubit 0
-          result (qk/estimate-overlap-from-swap-measurements measurement-data ancilla-qubit)]
-      
-      (is (< (Math/abs (- (:prob-ancilla-0 result) 0.7)) 1e-10)
-          "Probability of ancilla=0 should be 0.7")
-      (is (< (Math/abs (- (:overlap-squared result) 0.4)) 1e-10)
-          "Overlap squared should be 0.4")
-      (is (> (:overlap-value result) 0.6)
-          "Overlap value should be > 0.6")
-      (is (< (:overlap-value result) 0.64)
-          "Overlap value should be < 0.64")))
-  
-  (testing "Perfect overlap case"
-    (let [measurements {"00000" 1000}  ; All measurements with ancilla=0
-          measurement-data (frequency-map-to-measurement-data measurements)
-          result (qk/estimate-overlap-from-swap-measurements measurement-data 0)]
-      
-      (is (= (:overlap-value result) 1.0))
-      (is (= (:overlap-squared result) 1.0))))
-  
-  (testing "Zero overlap case"
-    (let [measurements {"10000" 1000}  ; All measurements with ancilla=1
-          measurement-data (frequency-map-to-measurement-data measurements)
-          result (qk/estimate-overlap-from-swap-measurements measurement-data 0)]
-      
-      (is (= (:overlap-value result) 0.0))
-      (is (= (:overlap-squared result) 0.0)))))
-
 (deftest test-data-encoding-integration
   (testing "Angle encoding"
     (let [encoder (qk/encode-data-for-kernel [0.5 0.3] :angle 2 {:gate-type :ry})]
@@ -104,30 +69,6 @@
   (testing "Invalid encoding type"
     (is (thrown? Exception 
                  (qk/encode-data-for-kernel [0.5] :invalid 1 {})))))
-
-(deftest test-swap-test-circuit-creation
-  (testing "SWAP test circuit structure"
-    (let [base-circuit (circuit/create-circuit 5)
-          register1 [0 1]
-          register2 [2 3]
-          ancilla 4
-          swap-circuit (qk/swap-test-circuit base-circuit register1 register2 ancilla)]
-      
-      ;; Should have more operations than the base circuit
-      (is (> (count (:operations swap-circuit)) 
-             (count (:operations base-circuit))))
-      
-      ;; Should preserve circuit metadata
-      (is (= (:num-qubits swap-circuit) 
-             (:num-qubits base-circuit)))))
-  
-  (testing "Register size validation"
-    (is (thrown? AssertionError
-                 (qk/swap-test-circuit 
-                  (circuit/create-circuit 4)
-                  [0 1]    ; 2 qubits
-                  [2]      ; 1 qubit - mismatch!
-                  3)))))
 
 (deftest test-kernel-matrix-analysis
   (testing "Symmetric matrix analysis"
@@ -217,15 +158,65 @@
         (is (< (get-in svm-matrix [0 1]) 1.0)
             "Off-diagonal elements should not include regularization"))))
 
-(comment
-  ;; Run tests in this namespace
-  (run-tests)
+(deftest test-quantum-kernel-overlap
+  (testing "Overlap computation with angle encoding"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :angle
+                  :num-qubits 2
+                  :shots 1024
+                  :encoding-options {:gate-type :ry}}
+          data-point1 [0.1 0.2]
+          data-point2 [0.8 0.9]
+          result (qk/quantum-kernel-overlap backend data-point1 data-point2 config)]
+      
+      ;; Verify result structure
+      (is (map? result))
+      (is (contains? result :overlap-value))
+      (is (contains? result :measurement-data))
+      
+      ;; Verify overlap value is in valid range [0, 1]
+      (is (number? (:overlap-value result)))
+      (is (>= (:overlap-value result) 0.0))
+      (is (<= (:overlap-value result) 1.0))))
   
-  ;; Individual test examples
-  (test-kernel-config-validation)
-  (test-swap-test-measurement-analysis)
-  (test-data-encoding-integration)
-  )
+  (testing "Self-overlap should be 1.0"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :angle
+                  :num-qubits 2
+                  :shots 1024
+                  :encoding-options {:gate-type :ry}}
+          data-point [0.5 0.3]
+          result (qk/quantum-kernel-overlap backend data-point data-point config)]
+      
+      ;; Self-overlap should be very close to 1.0 (allowing for numerical precision)
+      (is (> (:overlap-value result) 0.99))
+      (is (<= (:overlap-value result) 1.0))))
+  
+  (testing "Overlap with basis encoding"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :basis
+                  :num-qubits 2
+                  :shots 1024}
+          data-point1 [0.0 1.0]
+          data-point2 [1.0 0.0]
+          result (qk/quantum-kernel-overlap backend data-point1 data-point2 config)]
+      
+      (is (number? (:overlap-value result)))
+      (is (>= (:overlap-value result) 0.0))
+      (is (<= (:overlap-value result) 1.0))))
+  
+  (testing "Overlap with IQP encoding"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :iqp
+                  :num-qubits 2
+                  :shots 1024}
+          data-point1 [0.2 0.3]
+          data-point2 [0.7 0.8]
+          result (qk/quantum-kernel-overlap backend data-point1 data-point2 config)]
+      
+      (is (number? (:overlap-value result)))
+      (is (>= (:overlap-value result) 0.0))
+      (is (<= (:overlap-value result) 1.0)))))
 
 
 (comment
@@ -234,3 +225,306 @@
 
   ;
   )
+
+(deftest test-parametrized-feature-map
+  (testing "Feature map creation with trainable parameters"
+    (let [data-point [0.1 0.2]
+          trainable-params [0.5 0.3 0.7 0.4 0.6 0.8 0.2 0.9]
+          num-qubits 2
+          num-layers 2
+          options {:gate-type :ry :entangling true}
+          feature-map (qk/parametrized-feature-map data-point trainable-params num-qubits num-layers options)]
+      
+      ;; Should return a function
+      (is (fn? feature-map))
+      
+      ;; Function should be applicable to a circuit
+      (let [base-circuit (circuit/create-circuit num-qubits)
+            encoded-circuit (feature-map base-circuit)]
+        (is (map? encoded-circuit))
+        (is (= (:num-qubits encoded-circuit) num-qubits))
+        ;; Should have operations from both encoding and trainable layers
+        (is (> (count (:operations encoded-circuit)) 0)))))
+  
+  (testing "Parameter count calculation"
+    (let [num-qubits 3
+          num-layers 2
+          expected-params (* num-qubits 2 num-layers)]
+      (is (= (qk/calculate-trainable-parameter-count num-qubits num-layers) expected-params))
+      (is (= (qk/calculate-trainable-parameter-count num-qubits num-layers) 12))))
+  
+  (testing "Feature map with different layer counts"
+    (let [data-point [0.1 0.2 0.3]
+          num-qubits 3
+          num-layers 3
+          num-params (qk/calculate-trainable-parameter-count num-qubits num-layers)
+          trainable-params (vec (repeat num-params 0.5))
+          feature-map (qk/parametrized-feature-map data-point trainable-params num-qubits num-layers {})]
+      
+      (is (fn? feature-map)))))
+
+(deftest test-trainable-quantum-kernel-overlap
+  (testing "Trainable kernel overlap computation"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :trainable
+                  :num-qubits 2
+                  :num-trainable-layers 2
+                  :shots 1024
+                  :encoding-options {:gate-type :ry}}
+          data-point1 [0.1 0.2]
+          data-point2 [0.8 0.9]
+          num-params (qk/calculate-trainable-parameter-count 2 2)
+          trainable-params (vec (repeat num-params 0.5))
+          result (qk/trainable-quantum-kernel-overlap backend data-point1 data-point2 trainable-params config)]
+      
+      ;; Verify result structure
+      (is (map? result))
+      (is (contains? result :overlap-value))
+      
+      ;; Verify overlap is in valid range
+      (is (number? (:overlap-value result)))
+      (is (>= (:overlap-value result) 0.0))
+      (is (<= (:overlap-value result) 1.0))))
+  
+  (testing "Trainable kernel self-overlap"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :trainable
+                  :num-qubits 2
+                  :num-trainable-layers 1
+                  :shots 1024}
+          data-point [0.3 0.4]
+          num-params (qk/calculate-trainable-parameter-count 2 1)
+          trainable-params (vec (repeat num-params 0.5))
+          result (qk/trainable-quantum-kernel-overlap backend data-point data-point trainable-params config)]
+      
+      ;; Self-overlap should be close to 1.0
+      (is (> (:overlap-value result) 0.99)))))
+
+(deftest test-compute-trainable-kernel-matrix
+  (testing "Trainable kernel matrix computation"
+    (let [backend (sim/create-simulator)
+          data-matrix [[0.1 0.2] [0.8 0.9] [0.3 0.4]]
+          config {:encoding-type :trainable
+                  :num-qubits 2
+                  :num-trainable-layers 1
+                  :shots 1024}
+          num-params (qk/calculate-trainable-parameter-count 2 1)
+          trainable-params (vec (repeat num-params 0.5))
+          kernel-matrix (qk/compute-trainable-kernel-matrix backend data-matrix trainable-params config)]
+      
+      ;; Verify matrix dimensions
+      (is (= (count kernel-matrix) 3))
+      (is (every? #(= (count %) 3) kernel-matrix))
+      
+      ;; Verify diagonal elements are close to 1.0
+      (is (> (get-in kernel-matrix [0 0]) 0.99))
+      (is (> (get-in kernel-matrix [1 1]) 0.99))
+      (is (> (get-in kernel-matrix [2 2]) 0.99))
+      
+      ;; Verify symmetry
+      (is (= (get-in kernel-matrix [0 1]) (get-in kernel-matrix [1 0])))
+      (is (= (get-in kernel-matrix [0 2]) (get-in kernel-matrix [2 0])))
+      (is (= (get-in kernel-matrix [1 2]) (get-in kernel-matrix [2 1])))
+      
+      ;; Verify all values are in valid range
+      (is (every? #(and (>= % 0.0) (<= % 1.0))
+                  (flatten kernel-matrix))))))
+
+(deftest test-train-quantum-kernel
+  (testing "Quantum kernel training with supervised alignment"
+    (let [backend (sim/create-simulator)
+          training-data [[0.1 0.2] [0.15 0.25] [0.8 0.9] [0.85 0.95]]
+          training-labels [0 0 1 1]
+          config {:num-qubits 2
+                  :num-trainable-layers 1
+                  :alignment-objective :supervised
+                  :optimization-method :adam
+                  :max-iterations 5  ; Keep low for testing
+                  :learning-rate 0.1
+                  :shots 512  ; Lower shots for faster testing
+                  :parameter-strategy :random
+                  :regularization :none}
+          result (qk/train-quantum-kernel backend training-data training-labels config)]
+      
+      ;; Verify result structure
+      (is (map? result))
+      (is (contains? result :optimal-parameters))
+      (is (contains? result :optimal-alignment))
+      (is (contains? result :initial-alignment))
+      (is (contains? result :iterations))
+      
+      ;; Verify optimal parameters
+      (is (vector? (:optimal-parameters result)))
+      (let [expected-params (qk/calculate-trainable-parameter-count 2 1)]
+        (is (= (count (:optimal-parameters result)) expected-params)))
+      
+      ;; Verify alignment values are numbers
+      (is (number? (:optimal-alignment result)))
+      (is (number? (:initial-alignment result)))
+      
+      ;; Verify iterations completed
+      (is (pos-int? (:iterations result)))
+      (is (<= (:iterations result) 5))))
+  
+  (testing "Quantum kernel training with L2 regularization"
+    (let [backend (sim/create-simulator)
+          training-data [[0.1 0.2] [0.8 0.9]]
+          training-labels [0 1]
+          config {:num-qubits 2
+                  :num-trainable-layers 1
+                  :alignment-objective :supervised
+                  :optimization-method :gradient-descent
+                  :max-iterations 3
+                  :learning-rate 0.05
+                  :shots 512
+                  :parameter-strategy :zero
+                  :regularization :l2
+                  :reg-lambda 0.01}
+          result (qk/train-quantum-kernel backend training-data training-labels config)]
+      
+      ;; Should complete without error
+      (is (map? result))
+      (is (vector? (:optimal-parameters result)))))
+  
+  (testing "Quantum kernel training with different parameter strategies"
+    (let [backend (sim/create-simulator)
+          training-data [[0.1 0.2] [0.8 0.9]]
+          training-labels [0 1]
+          base-config {:num-qubits 2
+                       :num-trainable-layers 1
+                       :alignment-objective :supervised
+                       :optimization-method :gradient-descent
+                       :max-iterations 2
+                       :shots 512}]
+      
+      ;; Test :random strategy
+      (let [config (assoc base-config :parameter-strategy :random)
+            result (qk/train-quantum-kernel backend training-data training-labels config)]
+        (is (vector? (:optimal-parameters result))))
+      
+      ;; Test :zero strategy
+      (let [config (assoc base-config :parameter-strategy :zero)
+            result (qk/train-quantum-kernel backend training-data training-labels config)]
+        (is (vector? (:optimal-parameters result))))
+      
+      ;; Test :custom strategy
+      (let [num-params (qk/calculate-trainable-parameter-count 2 1)
+            custom-params (vec (repeat num-params 0.3))
+            config (assoc base-config 
+                          :parameter-strategy :custom
+                          :initial-parameters custom-params)
+            result (qk/train-quantum-kernel backend training-data training-labels config)]
+        (is (vector? (:optimal-parameters result)))))))
+
+(deftest test-quantum-kernel-matrix
+  (testing "Full kernel matrix computation"
+    (let [backend (sim/create-simulator)
+          data-matrix [[0.1 0.2] [0.8 0.9] [0.3 0.4]]
+          config {:encoding-type :angle
+                  :num-qubits 2
+                  :shots 1024}
+          kernel-matrix (qk/quantum-kernel-matrix backend data-matrix config)]
+      
+      ;; Verify matrix dimensions
+      (is (= (count kernel-matrix) 3))
+      (is (every? #(= (count %) 3) kernel-matrix))
+      
+      ;; Verify diagonal elements are close to 1.0
+      (is (> (get-in kernel-matrix [0 0]) 0.99))
+      (is (> (get-in kernel-matrix [1 1]) 0.99))
+      (is (> (get-in kernel-matrix [2 2]) 0.99))
+      
+      ;; Verify symmetry
+      (is (= (get-in kernel-matrix [0 1]) (get-in kernel-matrix [1 0])))
+      (is (= (get-in kernel-matrix [0 2]) (get-in kernel-matrix [2 0])))
+      (is (= (get-in kernel-matrix [1 2]) (get-in kernel-matrix [2 1])))
+      
+      ;; Verify all values are in valid range
+      (is (every? #(and (>= % 0.0) (<= % 1.0))
+                  (flatten kernel-matrix)))))
+  
+  (testing "Kernel matrix with asymmetric computation"
+    (let [backend (sim/create-simulator)
+          data-matrix [[0.1 0.2] [0.8 0.9]]
+          config {:encoding-type :angle
+                  :num-qubits 2
+                  :shots 1024}
+          kernel-matrix (qk/quantum-kernel-matrix backend data-matrix config false)]
+      
+      ;; Should still work with asymmetric flag
+      (is (= (count kernel-matrix) 2))
+      (is (every? #(= (count %) 2) kernel-matrix)))))
+
+(deftest test-kernel-integration-workflow
+  (testing "End-to-end kernel workflow"
+    (let [backend (sim/create-simulator)
+          ;; 1. Prepare data
+          data-matrix [[0.1 0.2] [0.15 0.25] [0.8 0.9] [0.85 0.95]]
+          labels [0 0 1 1]
+          
+          ;; 2. Configure and compute initial kernel
+          kernel-config {:encoding-type :angle
+                         :num-qubits 2
+                         :shots 512}
+          initial-kernel (qk/quantum-kernel-matrix backend data-matrix kernel-config)
+          
+          ;; 3. Analyze initial kernel
+          initial-analysis (qk/analyze-kernel-matrix initial-kernel)
+          
+          ;; 4. Train quantum kernel
+          training-config {:num-qubits 2
+                           :num-trainable-layers 1
+                           :alignment-objective :supervised
+                           :optimization-method :adam
+                           :max-iterations 3
+                           :learning-rate 0.1
+                           :shots 512
+                           :parameter-strategy :random}
+          training-result (qk/train-quantum-kernel backend data-matrix labels training-config)
+          
+          ;; 5. Compute trained kernel matrix
+          trained-params (:optimal-parameters training-result)
+          trained-config (assoc training-config :encoding-type :trainable)
+          trained-kernel (qk/compute-trainable-kernel-matrix backend data-matrix trained-params trained-config)
+          
+          ;; 6. Analyze trained kernel
+          trained-analysis (qk/analyze-kernel-matrix trained-kernel)]
+      
+      ;; Verify initial kernel properties
+      (is (= (:dimensions initial-analysis) [4 4]))
+      (is (:symmetric? (:properties initial-analysis)))
+      (is (:diagonal-correct? (:properties initial-analysis)))
+      
+      ;; Verify training completed
+      (is (vector? trained-params))
+      (is (number? (:optimal-alignment training-result)))
+      
+      ;; Verify trained kernel properties
+      (is (= (:dimensions trained-analysis) [4 4]))
+      (is (:symmetric? (:properties trained-analysis)))
+      
+      ;; Both kernels should have valid values
+      (is (every? #(and (>= % 0.0) (<= % 1.0)) (flatten initial-kernel)))
+      (is (every? #(and (>= % 0.0) (<= % 1.0)) (flatten trained-kernel)))))
+  
+  (testing "Kernel function creation and usage"
+    (let [backend (sim/create-simulator)
+          config {:encoding-type :angle
+                  :num-qubits 2
+                  :shots 512}
+          kernel-fn (qk/create-quantum-kernel backend config)
+          
+          ;; Test kernel function on various data points
+          k11 (kernel-fn [0.1 0.2] [0.1 0.2])  ; Self-overlap
+          k12 (kernel-fn [0.1 0.2] [0.8 0.9])  ; Different points
+          k21 (kernel-fn [0.8 0.9] [0.1 0.2])] ; Symmetric
+      
+      ;; Self-overlap should be close to 1.0
+      (is (> k11 0.99))
+      
+      ;; Kernel should be symmetric
+      (is (= k12 k21))
+      
+      ;; All kernel values in valid range
+      (is (and (>= k11 0.0) (<= k11 1.0)))
+      (is (and (>= k12 0.0) (<= k12 1.0))))))

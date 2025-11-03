@@ -7,7 +7,7 @@
   for real quantum devices.
   
   Key Features:
-  - Hardware-compatible SWAP test circuits for overlap estimation
+  - Hardware-compatible adjoint/fidelity circuits for overlap estimation
   - Support for multiple encoding strategies (angle, amplitude, basis, IQP)
   - Efficient kernel matrix computation using transients
   - Batched processing for large datasets
@@ -16,9 +16,13 @@
   
   Algorithm:
   1. Encode classical data points into quantum states using feature maps
-  2. Compute pairwise overlaps |⟨ψ(x_i)|ψ(x_j)⟩|² using SWAP test circuits
+  2. Compute pairwise overlaps |⟨φ(x_i)|φ(x_j)⟩|² using adjoint/fidelity method
   3. Build kernel matrix for use with classical ML algorithms
-  4. Support symmetric and asymmetric kernel computations"
+  4. Support symmetric and asymmetric kernel computations
+  
+  The adjoint method prepares |ψ⟩ = U_φ(x)|0⟩ then applies U†_φ(x') and measures
+  P(|0⟩) = |⟨φ(x)|φ(x')⟩|², avoiding ancilla qubits and working correctly for
+  feature-mapped superposition states (unlike SWAP test)."
   (:require [clojure.spec.alpha :as s]
             [fastmath.core :as fm]
             [org.soulspace.qclojure.application.backend :as backend]
@@ -77,112 +81,6 @@
 (s/def ::encoding-options map?)
 
 ;;;
-;;; Hardware-compatible SWAP test circuit implementation
-;;;
-(defn swap-test-circuit
-  "Create a SWAP test circuit to measure overlap between two quantum states.
-  
-  The SWAP test is a fundamental quantum algorithm for estimating the overlap
-  |⟨ψ|φ⟩|² between two quantum states |ψ⟩ and |φ⟩. It uses an ancilla qubit
-  and controlled operations to encode the overlap in measurement statistics.
-  
-  Circuit structure:
-  1. Prepare ancilla in |+⟩ state (Hadamard gate)
-  2. Apply controlled-SWAP between the two state registers
-  3. Apply Hadamard to ancilla
-  4. Measure ancilla: P(0) = (1 + |⟨ψ|φ⟩|²)/2
-  
-  Parameters:
-  - circuit: Base quantum circuit
-  - register1-qubits: Qubit indices for first quantum state
-  - register2-qubits: Qubit indices for second quantum state
-  - ancilla-qubit: Ancilla qubit index for SWAP test
-  
-  Returns:
-  Circuit with SWAP test operations applied
-  
-  Hardware compatibility:
-  - Uses only standard gates (H, CNOT, controlled gates)
-  - Requires single ancilla qubit measurement
-  - Compatible with current quantum hardware constraints"
-  [circuit register1-qubits register2-qubits ancilla-qubit]
-  {:pre [(sequential? register1-qubits)
-         (sequential? register2-qubits)
-         (= (count register1-qubits) (count register2-qubits))
-         (integer? ancilla-qubit)]}
-
-  (let [num-data-qubits (count register1-qubits)]
-    (-> circuit
-        ;; 1. Prepare ancilla in |+⟩ state
-        (circuit/h-gate ancilla-qubit)
-
-        ;; 2. Apply controlled-SWAP operations using Fredkin gates
-        ;; For each pair of qubits in the two registers
-        ((fn [c]
-           (reduce (fn [circuit-acc i]
-                     (let [q1 (nth register1-qubits i)
-                           q2 (nth register2-qubits i)]
-                       ;; Fredkin gate: controlled-SWAP with ancilla as control
-                       (circuit/fredkin-gate circuit-acc ancilla-qubit q1 q2)))
-                   c
-                   (range num-data-qubits))))
-
-        ;; 3. Final Hadamard on ancilla
-        (circuit/h-gate ancilla-qubit)
-
-        ;; 4. Measure ancilla qubit
-        (circuit/measure-operation [ancilla-qubit]))))
-
-(defn estimate-overlap-from-swap-measurements
-  "Extract overlap estimate from SWAP test measurement results using QClojure result system.
-  
-  From SWAP test theory:
-  P(ancilla = 0) = (1 + |⟨ψ|φ⟩|²) / 2
-  Therefore: |⟨ψ|φ⟩|² = 2 * P(0) - 1
-  
-  Parameters:
-  - measurement-data: Measurement result data from QClojure result system
-  - ancilla-qubit: Index of ancilla qubit
-  
-  Returns:
-  Map with overlap estimate and measurement statistics"
-  [measurement-data ancilla-qubit]
-  (let [outcomes (:measurement-outcomes measurement-data)
-        shots (:shot-count measurement-data)
-        frequencies (:frequencies measurement-data)
-        
-        ;; Extract bit at ancilla qubit position from basis state
-        ;; Qubit numbering: LSB is qubit 0, so bit position is qubit index from right
-        ;; Handle both integer and string basis states
-        ancilla-bit (fn [state]
-                      (if (string? state)
-                        ;; String format like "10010" - ancilla-qubit indexes from left
-                        (let [bit-char (nth state ancilla-qubit)]
-                          (if (= bit-char \0) 0 1))
-                        ;; Integer format - extract bit using bit operations
-                        (bit-and (bit-shift-right state ancilla-qubit) 1)))
-        
-        ;; Count measurements where ancilla is 0
-        ;; Use frequencies for efficiency (avoids iterating all shots)
-        count-0 (reduce (fn [acc [state count]]
-                          (if (zero? (ancilla-bit state))
-                            (+ acc count)
-                            acc))
-                        0
-                        frequencies)
-
-        ;; Calculate probability and overlap
-        prob-0 (double (/ count-0 shots))
-        overlap-squared (max 0.0 (- (* 2.0 prob-0) 1.0))  ; Ensure non-negative
-        overlap (fm/sqrt overlap-squared)]
-
-    {:overlap-value overlap
-     :overlap-squared overlap-squared
-     :prob-ancilla-0 prob-0
-     :measurement-counts {:ancilla-0 count-0
-                          :ancilla-1 (- shots count-0)}
-     :shots shots
-     :measurement-data measurement-data}))
 
 ;;;
 ;;; Data encoding integration for kernel computation
@@ -331,11 +229,10 @@
         circuit-with-trainable))))
 
 (defn trainable-quantum-kernel-overlap
-  "Compute quantum kernel overlap using trainable parametrized feature maps.
+  "Compute quantum kernel overlap using trainable parametrized feature maps with adjoint method.
   
   This function extends the standard kernel computation with trainable parameters,
-  allowing the kernel to be optimized for specific datasets. This is essential
-  for achieving quantum advantage over classical kernels.
+  allowing the kernel to be optimized for specific datasets.
   
   Parameters:
   - backend: Quantum backend for circuit execution
@@ -355,42 +252,52 @@
         shots (:shots config 1024)
         encoding-options (:encoding-options config {})
 
-        total-qubits (+ (* 2 num-qubits) 1)
-        register1-qubits (range 0 num-qubits)
-        register2-qubits (range num-qubits (* 2 num-qubits))
-        ancilla-qubit (* 2 num-qubits)
+        base-circuit (circuit/create-circuit num-qubits)
 
-        base-circuit (circuit/create-circuit total-qubits)
-
+        ;; Step 1: Apply forward trainable feature map for data-point1
         encoder1 (parametrized-feature-map data-point1 trainable-params num-qubits num-layers encoding-options)
         circuit-with-state1 (encoder1 base-circuit)
 
+        ;; Step 2: Apply adjoint (inverse) trainable feature map for data-point2
         encoder2 (parametrized-feature-map data-point2 trainable-params num-qubits num-layers encoding-options)
-        shifted-circuit (reduce (fn [c op]
-                                  (let [shifted-op (update op :operation-params
-                                                           (fn [params]
-                                                             (cond-> params
-                                                               (:target params)
-                                                               (update :target #(+ % num-qubits))
-                                                               (:control params)
-                                                               (update :control #(+ % num-qubits)))))]
-                                    (update c :operations conj shifted-op)))
-                                circuit-with-state1
-                                (:operations (encoder2 (circuit/create-circuit num-qubits))))
+        encoder2-circuit (encoder2 (circuit/create-circuit num-qubits))
+        
+        ;; Invert operations (reverse order with negated angles)
+        inverted-ops (mapv (fn [op]
+                             (if (#{:ry :rx :rz} (:operation-type op))
+                               (update-in op [:operation-params :angle] -)
+                               op))
+                           (reverse (:operations encoder2-circuit)))
+        
+        final-circuit (reduce (fn [c op]
+                                (update c :operations conj op))
+                              circuit-with-state1
+                              inverted-ops)
 
-        swap-test-circuit (swap-test-circuit shifted-circuit register1-qubits register2-qubits ancilla-qubit)
+        ;; Measure all qubits
+        measured-circuit (circuit/measure-operation final-circuit (vec (range num-qubits)))
 
         options {:result-specs {:measurements {:shots shots
-                                               :qubits [ancilla-qubit]}}}
-
-        execution-result (backend/execute-circuit backend swap-test-circuit options)
+                                               :qubits (vec (range num-qubits))}}}
+        execution-result (backend/execute-circuit backend measured-circuit options)
         measurement-data (get-in execution-result [:results :measurement-results])]
 
     (if (or (nil? measurement-data) (empty? (:measurement-outcomes measurement-data)))
       {:overlap-value 0.0
        :error "No measurement results obtained"
        :measurement-data {}}
-      (estimate-overlap-from-swap-measurements measurement-data ancilla-qubit))))
+      (let [frequencies (:frequencies measurement-data)
+            total-shots (:shot-count measurement-data shots)
+            zero-state-count (get frequencies 0 0)
+            overlap-squared (/ (double zero-state-count) total-shots)
+            overlap-value (fm/sqrt overlap-squared)]
+        {:overlap-value overlap-value
+         :overlap-squared overlap-squared
+         :prob-zero-state (/ (double zero-state-count) total-shots)
+         :measurement-counts {:zero-state zero-state-count
+                              :total-shots total-shots}
+         :shots total-shots
+         :measurement-data measurement-data}))))
 
 (defn compute-trainable-kernel-matrix
   "Compute quantum kernel matrix with trainable parameters.
@@ -408,20 +315,44 @@
          (vector? trainable-params)
          (map? config)]}
   
-  (let [n (count data-matrix)]
+  (let [n (count data-matrix)
+        ;; Build kernel matrix using symmetric optimization
+        matrix-rows
+        (mapv (fn [i]
+                (let [data-point-i (nth data-matrix i)]
+                  (mapv (fn [j]
+                          (let [data-point-j (nth data-matrix j)]
+                            (cond
+                              ;; Diagonal elements are always 1.0
+                              (= i j) 1.0
+                              
+                              ;; Upper triangle - compute overlap
+                              (>= j i)
+                              (try
+                                (let [overlap-result (trainable-quantum-kernel-overlap
+                                                      backend
+                                                      data-point-i
+                                                      data-point-j
+                                                      trainable-params
+                                                      config)]
+                                  (if (:error overlap-result)
+                                    0.0
+                                    (:overlap-value overlap-result)))
+                                (catch Exception e
+                                  (println "Warning: trainable kernel computation failed for" i j ":" (.getMessage e))
+                                  0.0))
+                              
+                              ;; Lower triangle - will be filled from upper triangle
+                              :else 0.0)))
+                        (range n))))
+              (range n))]
+    
+    ;; Copy upper triangle to lower triangle for symmetry
     (mapv (fn [i]
             (mapv (fn [j]
-                    (if (= i j)
-                      1.0
-                      (let [overlap-result (trainable-quantum-kernel-overlap
-                                            backend
-                                            (nth data-matrix i)
-                                            (nth data-matrix j)
-                                            trainable-params
-                                            config)]
-                        (if (:error overlap-result)
-                          0.0
-                          (:overlap-value overlap-result)))))
+                    (if (< j i)
+                      (get-in matrix-rows [j i])  ; Copy from upper triangle
+                      (get-in matrix-rows [i j])))
                   (range n)))
           (range n))))
 
@@ -591,7 +522,7 @@
       
       {:success true
        :optimal-parameters (:optimal-parameters result)
-       :optimal-alignment (- (:optimal-value result))
+       :optimal-alignment (- (:optimal-energy result))
        :initial-alignment (- (alignment-objective initial-params))
        :iterations (:iterations result)
        :optimization-method optimization-method
@@ -599,12 +530,13 @@
        :training-history result})))
 
 (defn quantum-kernel-overlap
-  "Compute quantum kernel overlap between two data points using SWAP test.
+  "Compute quantum kernel overlap between two data points using adjoint method.
   
-  This function implements the core quantum kernel computation by:
-  1. Encoding both data points into quantum states
-  2. Creating a SWAP test circuit to measure their overlap
-  3. Executing the circuit with proper result specs and extracting overlap from measurements
+  This function implements the core quantum kernel computation using the fidelity test:
+  1. Prepare state |ψ⟩ = U_φ(x)|0⟩ using feature map U_φ(x)
+  2. Apply adjoint U†_φ(x') of the feature map for the second data point
+  3. Measure probability of returning to |0⟩ state
+  4. This probability equals |⟨φ(x)|φ(x')⟩|², the quantum kernel value
   
   Parameters:
   - backend: Quantum backend for circuit execution
@@ -623,51 +555,59 @@
         shots (:shots config 1024)
         encoding-options (:encoding-options config {})
 
-        ;; Calculate required qubits: 2 registers + 1 ancilla
-        total-qubits (+ (* 2 num-qubits) 1)
-        register1-qubits (range 0 num-qubits)
-        register2-qubits (range num-qubits (* 2 num-qubits))
-        ancilla-qubit (* 2 num-qubits)
-
         ;; Create base circuit
-        base-circuit (circuit/create-circuit total-qubits)
+        base-circuit (circuit/create-circuit num-qubits)
 
-        ;; Encode first data point in first register
+        ;; Step 1: Apply forward feature map U_φ(x) to prepare |ψ⟩ = U_φ(x)|0⟩
         encoder1 (encode-data-for-kernel data-point1 encoding-type num-qubits encoding-options)
         circuit-with-state1 (encoder1 base-circuit)
 
-        ;; Encode second data point in second register (shift qubit indices)
+        ;; Step 2: Apply adjoint (inverse) feature map U†_φ(x')
+        ;; For real-valued rotation gates (RY), the adjoint is the negative rotation
         encoder2 (encode-data-for-kernel data-point2 encoding-type num-qubits encoding-options)
-        ;; Create shifted circuit for second register
-        shifted-circuit (reduce (fn [c op]
-                                  (let [shifted-op (update op :operation-params
-                                                           (fn [params]
-                                                             (cond-> params
-                                                               (:target params)
-                                                               (update :target #(+ % num-qubits))
-                                                               (:control params)
-                                                               (update :control #(+ % num-qubits)))))]
-                                    (update c :operations conj shifted-op)))
-                                circuit-with-state1
-                                (:operations (encoder2 (circuit/create-circuit num-qubits))))
+        encoder2-circuit (encoder2 (circuit/create-circuit num-qubits))
+        
+        ;; Invert the operations from encoder2 (apply in reverse order with negated angles)
+        inverted-ops (mapv (fn [op]
+                             (if (#{:ry :rx :rz} (:operation-type op))
+                               ;; Negate rotation angles for adjoint
+                               (update-in op [:operation-params :angle] -)
+                               ;; Other gates (H, X, CNOT) are self-adjoint
+                               op))
+                           (reverse (:operations encoder2-circuit)))
+        
+        ;; Apply inverted operations to circuit
+        final-circuit (reduce (fn [c op]
+                                (update c :operations conj op))
+                              circuit-with-state1
+                              inverted-ops)
 
-        ;; Apply SWAP test
-        swap-test-circuit (swap-test-circuit shifted-circuit register1-qubits register2-qubits ancilla-qubit)
+        ;; Step 3: Measure all qubits - probability of |00...0⟩ = |⟨φ(x)|φ(x')⟩|²
+        measured-circuit (circuit/measure-operation final-circuit (vec (range num-qubits)))
 
-        ;; Define options with result specifications for measurement extraction
+        ;; Execute circuit
         options {:result-specs {:measurements {:shots shots
-                                               :qubits [ancilla-qubit]}}}
-
-        ;; Execute circuit with result specs (wrapped in options map)
-        execution-result (backend/execute-circuit backend swap-test-circuit options)
-
+                                               :qubits (vec (range num-qubits))}}}
+        execution-result (backend/execute-circuit backend measured-circuit options)
         measurement-data (get-in execution-result [:results :measurement-results])]
 
     (if (or (nil? measurement-data) (empty? (:measurement-outcomes measurement-data)))
       {:overlap-value 0.0
        :error "No measurement results obtained"
        :measurement-data {}}
-      (estimate-overlap-from-swap-measurements measurement-data ancilla-qubit))))
+      ;; Extract overlap from measurements - count how many times we measured |00...0⟩
+      (let [frequencies (:frequencies measurement-data)
+            total-shots (:shot-count measurement-data shots)
+            zero-state-count (get frequencies 0 0)  ; Count of |00...0⟩ measurements
+            overlap-squared (/ (double zero-state-count) total-shots)
+            overlap-value (fm/sqrt overlap-squared)]
+        {:overlap-value overlap-value
+         :overlap-squared overlap-squared
+         :prob-zero-state (/ (double zero-state-count) total-shots)
+         :measurement-counts {:zero-state zero-state-count
+                              :total-shots total-shots}
+         :shots total-shots
+         :measurement-data measurement-data}))))
 
 ;;;
 ;;; Efficient kernel matrix computation with transients
