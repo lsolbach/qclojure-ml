@@ -493,37 +493,21 @@
   (train-qml-model test-ansatz test-training-data training-config))
   
 
-;; Scicloj/noj integration for data preprocessing and metrics
-;; Note: This requires adding noj dependencies to project.clj
-
-(defn normalize-features-with-noj
-  "Normalize features using scicloj noj functionality when available.
-  
-  Falls back to built-in normalization if noj is not available.
-  
+(defn normalize-features
+  "Normalize features.
+    
   Parameters:
   - feature-matrix: 2D vector of features [[row1] [row2] ...]
   
   Returns:
   Normalized feature matrix"
   [feature-matrix]
-  (try
-    ;; For now, fallback to built-in normalization since noj is not yet integrated
-    (mapv (fn [row]
-            (let [norm-result (encoding/normalize-features row)]
-              (if (:success norm-result)
-                (:result norm-result)
-                row)))
-          feature-matrix)
-    (catch Exception _e
-      (println "Warning: using built-in normalization")
-      ;; Fallback to built-in normalization
-      (mapv (fn [row]
-              (let [norm-result (encoding/normalize-features row)]
-                (if (:success norm-result)
-                  (:result norm-result)
-                  row)))
-            feature-matrix))))
+  (mapv (fn [row]
+          (let [norm-result (encoding/normalize-features row)]
+            (if (:success norm-result)
+              (:result norm-result)
+              row)))
+        feature-matrix))
 
 (defn calculate-ml-metrics
   "Calculate comprehensive ML metrics for quantum machine learning results.
@@ -595,7 +579,7 @@
   [features labels task-type & {:keys [metadata] :or {metadata {}}}]
   (let [n-samples (count features)
         n-features (count (first features))
-        normalized-features (normalize-features-with-noj features)]
+        normalized-features (normalize-features features)]
     
     {:features normalized-features
      :labels labels
