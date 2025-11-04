@@ -806,7 +806,10 @@
   (s/valid? ::qnn-network (:network allocated-network))
 
   ;; Check total parameters
-  (:total-parameters allocated-network))  ; Should be 19 parameters total
+  (:total-parameters allocated-network)  ; Should be 19 parameters total
+  
+  ;
+  )
 
 ;;;
 ;;; QNN Training Integration
@@ -1262,7 +1265,7 @@
       ;; Default: bitstring extraction
       (let [most-probable (extract-most-probable-state measurement-result)]
         (Integer/parseInt most-probable)))
-
+    
     :regression
     (case measurement-strategy
       :expectation
@@ -1485,7 +1488,6 @@
 ;;;
 ;;; QNN Model Interface
 ;;;
-
 (defn create-qnn-model
   "Create a complete QNN model with training and inference capabilities.
   
@@ -1548,3 +1550,194 @@
 ;;;
 ;;; Rich Comment Block for Interactive Development
 ;;;
+(comment
+  ;; QNN Example: Binary Classification Task
+  ;; This example demonstrates building, training, and evaluating a QNN
+  ;; for a simple binary classification problem.
+
+  ;; Required namespaces for the example
+  (require '[org.soulspace.qclojure.adapter.backend.ideal-simulator :as simulator]
+           '[clojure.string :as str])
+
+  ;; Step 1: Create a quantum backend
+  (def backend (simulator/create-simulator))
+
+  ;; Step 2: Define a simple binary classification dataset
+  ;; Two features per sample, binary labels (0 or 1)
+  (def training-data
+    [{:features [0.1 0.2] :label 0}
+     {:features [0.8 0.9] :label 1}
+     {:features [0.2 0.1] :label 0}
+     {:features [0.9 0.8] :label 1}
+     {:features [0.15 0.25] :label 0}
+     {:features [0.85 0.75] :label 1}])
+
+  (def test-data
+    [{:features [0.12 0.18] :label 0}
+     {:features [0.88 0.82] :label 1}
+     {:features [0.3 0.2] :label 0}
+     {:features [0.7 0.9] :label 1}])
+
+  ;; Step 3: Create a QNN network configuration
+  ;; Using a feedforward architecture with 2 qubits
+  (def qnn-network
+    (create-feedforward-qnn
+     2                           ; num-qubits
+     2                           ; hidden-layers
+     :feature-map-type :angle    ; angle encoding for input
+     :activation-type :quantum-tanh))
+
+  ;; Step 4: Analyze the network structure
+  (def network-analysis (analyze-qnn-network qnn-network))
+  network-analysis
+  ;; => {:network-structure {:depth 8
+  ;;                         :total-qubits 2
+  ;;                         :total-parameters 18
+  ;;                         :layer-composition {:input 1, :dense 2, :entangling 2, :activation 2, :measurement 1}}
+  ;;     :layer-analysis [{:layer-index 0, :layer-type :input, :num-qubits 2, :parameter-count 0}
+  ;;                       {:layer-index 1, :layer-type :dense, :num-qubits 2, :parameter-count 6}
+  ;;                       ...]}
+
+  ;; Step 5: Visualize the network
+  (println (visualize-qnn-network qnn-network))
+  ;; => QNN Network Visualization with emojis and layer details
+
+  ;; Step 6: Create initial parameters (random)
+  ;; NOTE: Use the correct path to get total parameters from network-structure
+  (def num-params (get-in network-analysis [:network-structure :total-parameters]))
+  (def initial-params
+    (vec (repeatedly num-params #(* 2 Math/PI (rand)))))
+
+  ;; Step 7: Test forward pass with initial parameters
+  (def test-circuit
+    (apply-qnn-network qnn-network [0.5 0.5] initial-params))
+  
+  (def test-result
+    (qnn-forward-pass
+     qnn-network
+     [0.5 0.5]
+     initial-params
+     backend
+     :options {:shots 1024
+               :task-type :classification}))
+
+  ;; Helper to extract prediction from simulator result format
+  ;; The ideal-simulator returns results in :results :measurement-results :frequencies
+  (defn extract-prediction-from-simulator-result
+    "Extract most probable state from ideal-simulator result format"
+    [result]
+    (let [frequencies (get-in result [:results :measurement-results :frequencies])]
+      (when (and frequencies (seq frequencies))
+        (let [[max-state _max-count] (apply max-key val frequencies)
+              num-qubits (get-in result [:results :circuit :num-qubits] 2)
+              format-str (str "%" num-qubits "s")]
+          (str/replace
+           (format format-str (Integer/toBinaryString max-state))
+           " " "0")))))
+
+  ;; Extract prediction from result
+  (def test-prediction
+    (extract-prediction-from-simulator-result test-result))
+  test-prediction
+  ;; => "10" or "00" or "01" or "11" (bitstring)
+
+  ;; Check the full result structure
+  (keys test-result)
+  ;; => (:job-status :results :execution-time-ms :job-id)
+  
+  (keys (:results test-result))
+  ;; => (:final-state :result-types :circuit :circuit-metadata :measurement-results)
+
+  ;; Step 8: Explore measurement results
+  (def measurement-results (get-in test-result [:results :measurement-results]))
+  (:shot-count measurement-results)  ; => 1024
+  (take 5 (:frequencies measurement-results))  ; => Sample of state frequencies
+
+  ;; Step 9: Simple prediction without training
+  ;; For a quick test, let's make predictions on training data with random parameters
+  (defn simple-predict [features params]
+    (let [result (qnn-forward-pass qnn-network features params backend
+                                   :options {:shots 512})]
+      (extract-prediction-from-simulator-result result)))
+
+  (simple-predict [0.1 0.2] initial-params)  ; => "10" (example output)
+  (simple-predict [0.8 0.9] initial-params)  ; => "01" (example output)
+
+  ;; Step 10: Analyze circuit properties
+  (def circuit-info
+    {:num-qubits (:num-qubits test-circuit)
+     :num-operations (count (:operations test-circuit))
+     :circuit-name (:name test-circuit)})
+  circuit-info
+  ;; => {:num-qubits 2, :num-operations 20, :circuit-name "QNN Forward Pass"}
+
+  ;; Step 11: Custom network architecture example
+  (def custom-network
+    (let [input-layer {:layer-type :input
+                       :num-qubits 3
+                       :parameter-count 0
+                       :feature-map-type :amplitude}
+          
+          dense-1 {:layer-type :dense
+                   :num-qubits 3
+                   :parameter-count 9}
+          
+          entangling-1 {:layer-type :entangling
+                        :num-qubits 3
+                        :parameter-count 2
+                        :entangling-pattern :circular}
+          
+          activation-1 {:layer-type :activation
+                        :num-qubits 3
+                        :parameter-count 3
+                        :activation-type :pauli-rotation}
+          
+          output-layer {:layer-type :measurement
+                        :num-qubits 3
+                        :parameter-count 0
+                        :measurement-basis :computational}
+          
+          network [input-layer dense-1 entangling-1 activation-1 output-layer]
+          allocated (allocate-parameters network)]
+      (:network allocated)))
+
+  ;; Validate custom network
+  (s/valid? ::qnn-network custom-network)
+  ;; => true
+
+  ;; Analyze custom network
+  (def custom-analysis (analyze-qnn-network custom-network))
+  (get-in custom-analysis [:network-structure :total-parameters])
+  ;; => 21 (9 dense + 2 entangling + 9 pauli-rotation + 1 for circular entangling)
+
+  (println (visualize-qnn-network custom-network))
+  ;; => Visualization of custom 3-qubit network
+
+  ;; Step 12: Parameter inspection helpers
+  (defn get-layer-params [network param-vec layer-idx]
+    (let [layer (nth network layer-idx)]
+      (extract-layer-parameters layer param-vec)))
+
+  ;; Get parameters for first dense layer (index 1)
+  (get-layer-params qnn-network initial-params 1)
+  ;; => [param1 param2 param3 param4 param5 param6] (6 rotation angles)
+
+  ;; Step 13: Compare different activation functions
+  (defn create-network-with-activation [activation-type]
+    (create-feedforward-qnn 2 1 
+                            :feature-map-type :angle
+                            :activation-type activation-type))
+
+  (def qnn-tanh (create-network-with-activation :quantum-tanh))
+  (def qnn-relu (create-network-with-activation :quantum-relu))
+  (def qnn-pauli (create-network-with-activation :pauli-rotation))
+
+  ;; Compare parameter counts
+  (map #(get-in (analyze-qnn-network %) [:network-structure :total-parameters])
+       [qnn-tanh qnn-relu qnn-pauli])
+  ;; => (9 9 13) - pauli-rotation uses more parameters (3 per qubit vs 1)
+
+  ;; End of working QNN example
+  ;; 
+
+  )
