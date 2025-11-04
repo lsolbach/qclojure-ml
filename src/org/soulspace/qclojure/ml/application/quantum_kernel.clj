@@ -400,7 +400,7 @@
   {:pre [(vector? data-matrix)
          (or (nil? labels) (vector? labels))
          (map? config)]}
-  
+
   (let [num-qubits (:num-qubits config)
         num-layers (:num-trainable-layers config 2)
         objective-type (:alignment-objective config :supervised)
@@ -409,25 +409,25 @@
         learning-rate (:learning-rate config 0.01)
         shots (:shots config 1024)
         tolerance (:tolerance config 1e-6)
-        
+
         ;; Regularization configuration
         regularization (:regularization config :none)
         reg-lambda (:reg-lambda config 0.01)
         reg-alpha (:reg-alpha config 0.5)
-        
+
         ;; Use training utilities for parameter initialization
         num-params (calculate-trainable-parameter-count num-qubits num-layers)
         parameter-strategy (:parameter-strategy config :random)
         initial-params (case parameter-strategy
-                         :random (va/random-parameter-initialization 
-                                  num-params 
+                         :random (va/random-parameter-initialization
+                                  num-params
                                   :range (:parameter-range config [(- fm/PI) fm/PI]))
                          :zero (va/zero-parameter-initialization num-params)
                          :custom (:initial-parameters config)
                          :legacy (vec (repeatedly num-params #(* 0.1 (rand))))
                          ;; Default to random with [-π, π] range
                          (va/random-parameter-initialization num-params :range [(- fm/PI) fm/PI]))
-        
+
         ideal-kernel (when (and labels (= objective-type :supervised))
                        (let [n (count data-matrix)]
                          (mapv (fn [i]
@@ -437,9 +437,9 @@
                                            0.0))
                                        (range n)))
                                (range n))))
-        
+
         target-kernel (or (:target-kernel config) ideal-kernel)
-        
+
         alignment-objective
         (fn [params]
           (try
@@ -466,7 +466,7 @@
                   alignment (if (> denominator 0.0)
                               (/ numerator denominator)
                               0.0)
-                  
+
                   ;; Add regularization penalty using training utilities
                   reg-penalty (case regularization
                                 :l1 (training/l1-regularization params reg-lambda)
@@ -478,56 +478,56 @@
               (+ (- alignment) reg-penalty))
             (catch Exception e
               (println "Warning: alignment computation failed:" (.getMessage e))
-              1.0)))]
+              1.0)))
+
+        ;; Use newer unified optimization API from training namespace pattern
+        result (cond
+                 (= optimization-method :gradient-descent)
+                 (opt/gradient-descent-optimization alignment-objective initial-params
+                                                    {:max-iterations max-iterations
+                                                     :learning-rate learning-rate
+                                                     :tolerance tolerance})
+
+                 (= optimization-method :adam)
+                 (opt/adam-optimization alignment-objective initial-params
+                                        {:max-iterations max-iterations
+                                         :learning-rate learning-rate
+                                         :tolerance tolerance})
+
+                 (= optimization-method :cmaes)
+                 (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+
+                 (= optimization-method :nelder-mead)
+                 (opt/fastmath-derivative-free-optimization :nelder-mead alignment-objective initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+
+                 (= optimization-method :powell)
+                 (opt/fastmath-derivative-free-optimization :powell alignment-objective initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+
+                 (= optimization-method :bobyqa)
+                 (opt/fastmath-derivative-free-optimization :bobyqa alignment-objective initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance})
+
+                 ;; Default to CMAES
+                 :else
+                 (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
+                                                            {:max-iterations max-iterations
+                                                             :tolerance tolerance}))]
     
-    ;; Use newer unified optimization API from training namespace pattern
-    (let [result (cond
-                   (= optimization-method :gradient-descent)
-                   (opt/gradient-descent-optimization alignment-objective initial-params
-                                                      {:max-iterations max-iterations
-                                                       :learning-rate learning-rate
-                                                       :tolerance tolerance})
-                   
-                   (= optimization-method :adam)
-                   (opt/adam-optimization alignment-objective initial-params
-                                          {:max-iterations max-iterations
-                                           :learning-rate learning-rate
-                                           :tolerance tolerance})
-                   
-                   (= optimization-method :cmaes)
-                   (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
-                                                              {:max-iterations max-iterations
-                                                               :tolerance tolerance})
-                   
-                   (= optimization-method :nelder-mead)
-                   (opt/fastmath-derivative-free-optimization :nelder-mead alignment-objective initial-params
-                                                              {:max-iterations max-iterations
-                                                               :tolerance tolerance})
-                   
-                   (= optimization-method :powell)
-                   (opt/fastmath-derivative-free-optimization :powell alignment-objective initial-params
-                                                              {:max-iterations max-iterations
-                                                               :tolerance tolerance})
-                   
-                   (= optimization-method :bobyqa)
-                   (opt/fastmath-derivative-free-optimization :bobyqa alignment-objective initial-params
-                                                              {:max-iterations max-iterations
-                                                               :tolerance tolerance})
-                   
-                   ;; Default to CMAES
-                   :else
-                   (opt/fastmath-derivative-free-optimization :cmaes alignment-objective initial-params
-                                                              {:max-iterations max-iterations
-                                                               :tolerance tolerance}))]
-      
-      {:success true
-       :optimal-parameters (:optimal-parameters result)
-       :optimal-alignment (- (:optimal-energy result))
-       :initial-alignment (- (alignment-objective initial-params))
-       :iterations (:iterations result)
-       :optimization-method optimization-method
-       :config config
-       :training-history result})))
+    {:success true
+     :optimal-parameters (:optimal-parameters result)
+     :optimal-alignment (- (:optimal-energy result))
+     :initial-alignment (- (alignment-objective initial-params))
+     :iterations (:iterations result)
+     :optimization-method optimization-method
+     :config config
+     :training-history result}))
 
 (defn quantum-kernel-overlap
   "Compute quantum kernel overlap between two data points using adjoint method.
@@ -729,7 +729,7 @@
      (println (str "Computing " total-computations " kernel entries in batches of " batch-size))
 
      ;; Use the standard kernel matrix computation but add progress monitoring
-     ;; This is a simplified implementation - could be further optimized
+     ;; FIXME This is a simplified implementation - could be further optimized
      (quantum-kernel-matrix backend data-matrix config))))
 
 ;;;
